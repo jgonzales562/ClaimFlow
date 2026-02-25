@@ -28,14 +28,20 @@ enum WarrantyStatus {
   UNCLEAR
 }
 
+enum InboundEmailProvider {
+  POSTMARK
+}
+
 model Organization {
-  id          String       @id @default(cuid())
-  name        String
-  slug        String       @unique
-  createdAt   DateTime     @default(now())
-  updatedAt   DateTime     @updatedAt
-  memberships Membership[]
-  claims      Claim[]
+  id                 String               @id @default(cuid())
+  name               String
+  slug               String               @unique
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+  memberships        Membership[]
+  claims             Claim[]
+  integrationMailbox IntegrationMailbox[]
+  inboundMessages    InboundMessage[]
 }
 
 model User {
@@ -63,7 +69,7 @@ model Membership {
 }
 
 model Claim {
-  id              String         @id @default(cuid())
+  id              String           @id @default(cuid())
   organizationId  String
   externalClaimId String?
   sourceEmail     String?
@@ -73,15 +79,54 @@ model Claim {
   purchaseDate    DateTime?
   issueSummary    String?
   retailer        String?
-  warrantyStatus  WarrantyStatus @default(UNCLEAR)
-  missingInfo     String[]       @default([])
-  status          ClaimStatus    @default(NEW)
+  warrantyStatus  WarrantyStatus   @default(UNCLEAR)
+  missingInfo     String[]         @default([])
+  status          ClaimStatus      @default(NEW)
   createdByUserId String?
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  createdByUser   User?          @relation("ClaimCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser   User?            @relation("ClaimCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  inboundMessages InboundMessage[]
 
   @@unique([organizationId, externalClaimId])
   @@index([organizationId, status, createdAt])
+}
+
+model IntegrationMailbox {
+  id             String               @id @default(cuid())
+  organizationId String
+  provider       InboundEmailProvider @default(POSTMARK)
+  mailboxHash    String
+  emailAddress   String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, mailboxHash])
+  @@index([organizationId])
+}
+
+model InboundMessage {
+  id                String               @id @default(cuid())
+  organizationId    String
+  provider          InboundEmailProvider @default(POSTMARK)
+  providerMessageId String
+  mailboxHash       String?
+  fromEmail         String?
+  fromName          String?
+  toEmail           String?
+  subject           String?
+  receivedAt        DateTime?
+  textBody          String?
+  htmlBody          String?
+  strippedTextReply String?
+  rawPayload        Json
+  claimId           String?
+  createdAt         DateTime             @default(now())
+  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim             Claim?               @relation(fields: [claimId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, provider, providerMessageId])
+  @@index([organizationId, createdAt])
 }

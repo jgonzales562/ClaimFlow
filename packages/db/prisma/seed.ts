@@ -73,6 +73,25 @@ async function main(): Promise<void> {
       status: ClaimStatus.REVIEW_REQUIRED,
     },
   });
+
+  await prisma.integrationMailbox.upsert({
+    where: {
+      provider_mailboxHash: {
+        provider: "POSTMARK",
+        mailboxHash: "acme",
+      },
+    },
+    update: {
+      organizationId: organization.id,
+      emailAddress: "claims+acme@inbound.claimflow.dev",
+    },
+    create: {
+      organizationId: organization.id,
+      provider: "POSTMARK",
+      mailboxHash: "acme",
+      emailAddress: "claims+acme@inbound.claimflow.dev",
+    },
+  });
 }
 
 async function hashPassword(password: string): Promise<string> {
