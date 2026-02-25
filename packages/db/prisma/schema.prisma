@@ -1,0 +1,87 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  ANALYST
+  VIEWER
+}
+
+enum ClaimStatus {
+  NEW
+  PROCESSING
+  REVIEW_REQUIRED
+  READY
+  ERROR
+}
+
+enum WarrantyStatus {
+  LIKELY_IN_WARRANTY
+  LIKELY_EXPIRED
+  UNCLEAR
+}
+
+model Organization {
+  id          String       @id @default(cuid())
+  name        String
+  slug        String       @unique
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  memberships Membership[]
+  claims      Claim[]
+}
+
+model User {
+  id            String       @id @default(cuid())
+  email         String       @unique
+  fullName      String?
+  passwordHash  String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  memberships   Membership[]
+  createdClaims Claim[]      @relation("ClaimCreatedBy")
+}
+
+model Membership {
+  id             String         @id @default(cuid())
+  organizationId String
+  userId         String
+  role           MembershipRole @default(ANALYST)
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Claim {
+  id              String         @id @default(cuid())
+  organizationId  String
+  externalClaimId String?
+  sourceEmail     String?
+  customerName    String?
+  productName     String?
+  serialNumber    String?
+  purchaseDate    DateTime?
+  issueSummary    String?
+  retailer        String?
+  warrantyStatus  WarrantyStatus @default(UNCLEAR)
+  missingInfo     String[]       @default([])
+  status          ClaimStatus    @default(NEW)
+  createdByUserId String?
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser   User?          @relation("ClaimCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, externalClaimId])
+  @@index([organizationId, status, createdAt])
+}

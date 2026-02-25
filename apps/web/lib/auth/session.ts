@@ -1,0 +1,119 @@
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+export const SESSION_COOKIE_NAME = "claimflow_session";
+const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+
+export type MembershipRole = "OWNER" | "ADMIN" | "ANALYST" | "VIEWER";
+
+export type SessionPayload = {
+  userId: string;
+  organizationId: string;
+  role: MembershipRole;
+  exp: number;
+};
+
+export function createSessionToken(
+  input: Omit<SessionPayload, "exp">,
+  ttlSeconds = DEFAULT_SESSION_TTL_SECONDS,
+): string {
+  const payload: SessionPayload = {
+    ...input,
+    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+  };
+
+  const encodedPayload = toBase64Url(JSON.stringify(payload));
+  const signature = signPayload(encodedPayload);
+  return `${encodedPayload}.${signature}`;
+}
+
+export function verifySessionToken(token: string): SessionPayload | null {
+  const [encodedPayload, providedSignature] = token.split(".");
+  if (!encodedPayload || !providedSignature) {
+    return null;
+  }
+
+  const expectedSignature = signPayload(encodedPayload);
+  const providedBuffer = Buffer.from(providedSignature);
+  const expectedBuffer = Buffer.from(expectedSignature);
+
+  if (providedBuffer.length !== expectedBuffer.length) {
+    return null;
+  }
+
+  if (!timingSafeEqual(providedBuffer, expectedBuffer)) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(fromBase64Url(encodedPayload)) as Partial<SessionPayload>;
+    if (!isSessionPayload(payload)) {
+      return null;
+    }
+
+    if (payload.exp <= Math.floor(Date.now() / 1000)) {
+      return null;
+    }
+
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+export function getSessionCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/",
+    maxAge: DEFAULT_SESSION_TTL_SECONDS,
+  };
+}
+
+export function getExpiredSessionCookieOptions() {
+  return {
+    ...getSessionCookieOptions(),
+    maxAge: 0,
+  };
+}
+
+function getSessionSecret(): string {
+  const secret = process.env.SESSION_SECRET;
+  if (secret && secret.length >= 32) {
+    return secret;
+  }
+
+  if (process.env.NODE_ENV === "production") {
+    throw new Error("SESSION_SECRET must be set in production and at least 32 characters long.");
+  }
+
+  return "dev-only-insecure-session-secret-change-me-please";
+}
+
+function signPayload(payload: string): string {
+  const signature = createHmac("sha256", getSessionSecret()).update(payload).digest("base64url");
+  return signature;
+}
+
+function toBase64Url(value: string): string {
+  return Buffer.from(value, "utf8").toString("base64url");
+}
+
+function fromBase64Url(value: string): string {
+  return Buffer.from(value, "base64url").toString("utf8");
+}
+
+function isSessionPayload(payload: Partial<SessionPayload>): payload is SessionPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+
+  const validRoles: MembershipRole[] = ["OWNER", "ADMIN", "ANALYST", "VIEWER"];
+
+  return (
+    typeof payload.userId === "string" &&
+    typeof payload.organizationId === "string" &&
+    typeof payload.exp === "number" &&
+    validRoles.includes(payload.role as MembershipRole)
+  );
+}
