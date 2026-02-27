@@ -13,6 +13,15 @@ export type PostmarkInboundPayload = {
     Name?: string | null;
     MailboxHash?: string | null;
   }> | null;
+  Attachments?: PostmarkAttachment[] | null;
+};
+
+export type PostmarkAttachment = {
+  Name?: string | null;
+  Content?: string | null;
+  ContentType?: string | null;
+  ContentLength?: number | null;
+  ContentID?: string | null;
 };
 
 type ParsedAddress = {
@@ -70,4 +79,57 @@ export function parseReceivedAt(value: string | null | undefined): Date | null {
   }
 
   return parsed;
+}
+
+export function getPostmarkAttachments(payload: PostmarkInboundPayload) {
+  return (payload.Attachments ?? [])
+    .map((attachment, index) => normalizeAttachment(attachment, index))
+    .filter((attachment): attachment is NormalizedPostmarkAttachment => attachment !== null);
+}
+
+export type NormalizedPostmarkAttachment = {
+  originalFilename: string;
+  contentType: string | null;
+  byteSize: number;
+  base64Content: string;
+  contentId: string | null;
+};
+
+function normalizeAttachment(
+  value: PostmarkAttachment,
+  index: number,
+): NormalizedPostmarkAttachment | null {
+  if (!value) {
+    return null;
+  }
+
+  const base64Content = typeof value.Content === "string" ? value.Content.trim() : "";
+  if (!base64Content) {
+    return null;
+  }
+
+  const fallbackFilename = `attachment-${index + 1}.bin`;
+  const originalFilename =
+    typeof value.Name === "string" && value.Name.trim() ? value.Name.trim() : fallbackFilename;
+
+  const contentType =
+    typeof value.ContentType === "string" && value.ContentType.trim()
+      ? value.ContentType.trim()
+      : null;
+
+  const parsedByteSize =
+    typeof value.ContentLength === "number" && Number.isFinite(value.ContentLength)
+      ? Math.max(Math.floor(value.ContentLength), 0)
+      : Math.floor((base64Content.length * 3) / 4);
+
+  const contentId =
+    typeof value.ContentID === "string" && value.ContentID.trim() ? value.ContentID.trim() : null;
+
+  return {
+    originalFilename,
+    contentType,
+    byteSize: parsedByteSize,
+    base64Content,
+    contentId,
+  };
 }

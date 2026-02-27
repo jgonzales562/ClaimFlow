@@ -32,6 +32,20 @@ enum InboundEmailProvider {
   POSTMARK
 }
 
+enum AttachmentStorageProvider {
+  S3
+}
+
+enum AttachmentUploadStatus {
+  STORED
+  FAILED
+}
+
+enum ClaimExtractionProvider {
+  OPENAI
+  FALLBACK
+}
+
 model Organization {
   id                 String               @id @default(cuid())
   name               String
@@ -42,6 +56,8 @@ model Organization {
   claims             Claim[]
   integrationMailbox IntegrationMailbox[]
   inboundMessages    InboundMessage[]
+  claimAttachments   ClaimAttachment[]
+  claimExtractions   ClaimExtraction[]
 }
 
 model User {
@@ -69,7 +85,7 @@ model Membership {
 }
 
 model Claim {
-  id              String           @id @default(cuid())
+  id              String            @id @default(cuid())
   organizationId  String
   externalClaimId String?
   sourceEmail     String?
@@ -79,15 +95,17 @@ model Claim {
   purchaseDate    DateTime?
   issueSummary    String?
   retailer        String?
-  warrantyStatus  WarrantyStatus   @default(UNCLEAR)
-  missingInfo     String[]         @default([])
-  status          ClaimStatus      @default(NEW)
+  warrantyStatus  WarrantyStatus    @default(UNCLEAR)
+  missingInfo     String[]          @default([])
+  status          ClaimStatus       @default(NEW)
   createdByUserId String?
-  createdAt       DateTime         @default(now())
-  updatedAt       DateTime         @updatedAt
-  organization    Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  createdByUser   User?            @relation("ClaimCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser   User?             @relation("ClaimCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
   inboundMessages InboundMessage[]
+  attachments     ClaimAttachment[]
+  extractions     ClaimExtraction[]
 
   @@unique([organizationId, externalClaimId])
   @@index([organizationId, status, createdAt])
@@ -126,7 +144,54 @@ model InboundMessage {
   createdAt         DateTime             @default(now())
   organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   claim             Claim?               @relation(fields: [claimId], references: [id], onDelete: SetNull)
+  attachments       ClaimAttachment[]
+  extractions       ClaimExtraction[]
 
   @@unique([organizationId, provider, providerMessageId])
   @@index([organizationId, createdAt])
+}
+
+model ClaimAttachment {
+  id               String                    @id @default(cuid())
+  organizationId   String
+  claimId          String
+  inboundMessageId String?
+  storageProvider  AttachmentStorageProvider @default(S3)
+  uploadStatus     AttachmentUploadStatus    @default(STORED)
+  originalFilename String
+  contentType      String?
+  byteSize         Int
+  checksumSha256   String?
+  s3Bucket         String
+  s3Key            String
+  errorMessage     String?
+  createdAt        DateTime                  @default(now())
+  organization     Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim            Claim                     @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  inboundMessage   InboundMessage?           @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([claimId])
+  @@index([inboundMessageId])
+}
+
+model ClaimExtraction {
+  id               String                  @id @default(cuid())
+  organizationId   String
+  claimId          String
+  inboundMessageId String?
+  provider         ClaimExtractionProvider @default(OPENAI)
+  model            String
+  schemaVersion    Int                     @default(1)
+  confidence       Float
+  extraction       Json
+  rawOutput        Json
+  createdAt        DateTime                @default(now())
+  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim            Claim                   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  inboundMessage   InboundMessage?         @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([claimId, createdAt])
+  @@index([inboundMessageId])
 }
