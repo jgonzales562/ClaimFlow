@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import type { CSSProperties } from "react";
 import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { clampLimit, formatDateInput, parseClaimFiltersFromRecord } from "@/lib/claims/filters";
+import { listErrorClaims, type ErrorClaimRecord } from "@/lib/claims/error-claims";
 
 type ErrorClaimsPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -11,28 +12,6 @@ type ErrorClaimsPageProps = {
 type ErrorClaimsResponse = {
   claims: ErrorClaimRecord[];
   count: number;
-};
-
-type ErrorClaimRecord = {
-  id: string;
-  externalClaimId: string | null;
-  sourceEmail: string | null;
-  customerName: string | null;
-  productName: string | null;
-  status: string;
-  warrantyStatus: string;
-  createdAt: string;
-  updatedAt: string;
-  failure: {
-    source: "worker_failure";
-    occurredAt: string;
-    reason: string | null;
-    retryable: boolean | null;
-    receiveCount: number | null;
-    failureDisposition: string | null;
-    fromStatus: string | null;
-    toStatus: string | null;
-  } | null;
 };
 
 export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageProps) {
@@ -46,52 +25,24 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
   }
 
   const resolvedSearchParams = (await searchParams) ?? {};
+  const parsedFilters = parseClaimFiltersFromRecord(resolvedSearchParams);
+  const limitParam = readRawSearchParam(resolvedSearchParams, "limit");
   const filters = {
-    search: readSearchParam(resolvedSearchParams, "search"),
-    createdFrom: readSearchParam(resolvedSearchParams, "created_from"),
-    createdTo: readSearchParam(resolvedSearchParams, "created_to"),
-    limit: clampLimit(readSearchParam(resolvedSearchParams, "limit"), 50, 1, 200),
+    search: parsedFilters.search,
+    createdFrom: parsedFilters.createdFrom,
+    createdTo: parsedFilters.createdTo,
+    limit: clampLimit(limitParam, 50, 1, 200),
   };
-
-  const apiQuery = new URLSearchParams();
-  if (filters.search) {
-    apiQuery.set("search", filters.search);
-  }
-  if (filters.createdFrom) {
-    apiQuery.set("created_from", filters.createdFrom);
-  }
-  if (filters.createdTo) {
-    apiQuery.set("created_to", filters.createdTo);
-  }
-  apiQuery.set("limit", String(filters.limit));
-
-  const headerStore = await headers();
-  const host = headerStore.get("x-forwarded-host") ?? headerStore.get("host") ?? "localhost:3000";
-  const proto =
-    headerStore.get("x-forwarded-proto") ??
-    (host.includes("localhost") || host.startsWith("127.0.0.1") ? "http" : "https");
-  const cookieHeader = headerStore.get("cookie") ?? "";
-  const endpoint = `${proto}://${host}/api/claims/errors?${apiQuery.toString()}`;
 
   let payload: ErrorClaimsResponse | null = null;
   let loadError: string | null = null;
 
   try {
-    const response = await fetch(endpoint, {
-      headers: {
-        cookie: cookieHeader,
-      },
-      cache: "no-store",
+    payload = await listErrorClaims({
+      organizationId: auth.organizationId,
+      filters: parsedFilters,
+      limit: filters.limit,
     });
-
-    if (!response.ok) {
-      loadError =
-        response.status === 403
-          ? "You do not have permission to view error triage."
-          : "Unable to load error claims.";
-    } else {
-      payload = (await response.json()) as ErrorClaimsResponse;
-    }
   } catch {
     loadError = "Unable to load error claims.";
   }
@@ -139,7 +90,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
               <input
                 type="date"
                 name="created_from"
-                defaultValue={filters.createdFrom ?? ""}
+                defaultValue={formatDateInput(filters.createdFrom)}
                 style={inputStyle}
               />
             </label>
@@ -149,7 +100,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
               <input
                 type="date"
                 name="created_to"
-                defaultValue={filters.createdTo ?? ""}
+                defaultValue={formatDateInput(filters.createdTo)}
                 style={inputStyle}
               />
             </label>
@@ -246,7 +197,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
   );
 }
 
-function readSearchParam(
+function readRawSearchParam(
   searchParams: Record<string, string | string[] | undefined>,
   key: string,
 ): string | null {
@@ -262,19 +213,6 @@ function readSearchParam(
   }
 
   return null;
-}
-
-function clampLimit(value: string | null, fallback: number, min: number, max: number): number {
-  if (!value) {
-    return fallback;
-  }
-
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-
-  return Math.min(Math.max(parsed, min), max);
 }
 
 function formatDateTime(value: string): string {

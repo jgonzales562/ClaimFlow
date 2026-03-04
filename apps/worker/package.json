@@ -14,7 +14,6 @@
     "@sentry/node": "^10.22.0",
     "@aws-sdk/client-sqs": "^3.876.0",
     "@aws-sdk/client-textract": "^3.876.0",
-    "@claimflow/shared": "workspace:*",
     "@prisma/client": "^6.4.1",
     "openai": "^5.22.0",
     "zod": "^3.24.2"

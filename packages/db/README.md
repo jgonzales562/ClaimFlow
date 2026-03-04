@@ -9,6 +9,7 @@ From repo root:
 - `pnpm db:generate`
 - `pnpm db:migrate:dev`
 - `pnpm db:migrate:deploy`
+- `pnpm --filter @claimflow/db prisma:migrate:status`
 - `pnpm db:seed`
 
 Or directly:
@@ -16,6 +17,7 @@ Or directly:
 - `pnpm --filter @claimflow/db prisma:generate`
 - `pnpm --filter @claimflow/db prisma:migrate:dev`
 - `pnpm --filter @claimflow/db prisma:migrate:deploy`
+- `pnpm --filter @claimflow/db prisma:migrate:status`
 - `pnpm --filter @claimflow/db seed`
 
 ## Environment

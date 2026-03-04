@@ -13,7 +13,6 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": {
-      "@claimflow/shared": ["packages/shared/src/index.ts"],
       "@claimflow/db": ["packages/db/src/index.ts"]
     }
   }

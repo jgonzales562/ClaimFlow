@@ -1,5 +1,10 @@
 # ClaimFlow V1 Implementation Plan
 
+## Status Snapshot (2026-03-04)
+- This document started as the V1 planning backlog.
+- Tickets 1-10 listed below have been implemented in the current repository baseline.
+- The "First 10 Tickets" section is retained for historical traceability.
+
 ## 1) V1 Objective
 Build a production-usable MVP for warranty claim intake automation:
 
@@ -28,12 +33,8 @@ claimflow/
     worker/                   # Background processing workers
   packages/
     db/                       # Prisma schema, client, migrations
-    shared/                   # Shared types/zod schemas/constants
-    config/                   # ESLint, TS, env validation helpers
   docs/
     runbooks/                 # Ops docs (queue failures, reprocessing)
-  infra/
-    terraform/                # Optional IaC for AWS resources
   .github/
     workflows/                # CI (lint, test, build)
 ```
@@ -110,11 +111,14 @@ M5: Hardening
 - Sentry + dashboards
 - Runbooks and basic load test
 
-## 8) First 10 Tickets (Execution Backlog)
+Current state:
+- M1-M5 are in place for the current MVP baseline.
+
+## 8) First 10 Tickets (Original Backlog, Now Implemented)
 
 ### Ticket 1: Monorepo bootstrap and developer tooling
 Scope:
-- Set up `pnpm` workspace with `apps/web`, `apps/worker`, `packages/db`, `packages/shared`
+- Set up `pnpm` workspace with `apps/web`, `apps/worker`, and `packages/db`
 - Add TypeScript configs, ESLint, Prettier, basic scripts
 
 Acceptance criteria:
@@ -142,7 +146,7 @@ Acceptance criteria:
 ### Ticket 4: Postmark inbound webhook endpoint
 Scope:
 - Create secure inbound endpoint in `apps/web`
-- Validate signature and parse inbound payload
+- Validate webhook auth and parse inbound payload
 - Persist normalized email metadata
 
 Acceptance criteria:
@@ -214,4 +218,3 @@ Acceptance criteria:
 - Org-level isolation and RBAC enforced
 - Error handling and retry paths documented and tested
 - One pilot customer can process claims daily without manual file wrangling
-

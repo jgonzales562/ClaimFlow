@@ -28,6 +28,7 @@ type WorkerConfig = {
   pollWaitSeconds: number;
   visibilityTimeoutSeconds: number | undefined;
   maxMessages: number;
+  processingConcurrency: number;
   maxReceiveCount: number;
   idleDelayMs: number;
   errorDelayMs: number;
@@ -115,6 +116,7 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
     dlqUrl: config.dlqUrl,
     pollWaitSeconds: config.pollWaitSeconds,
     maxMessages: config.maxMessages,
+    processingConcurrency: config.processingConcurrency,
     maxReceiveCount: config.maxReceiveCount,
     extractionModel: config.extractionModel,
     extractionReadyConfidence: config.extractionReadyConfidence,
@@ -152,11 +154,24 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
       continue;
     }
 
+    const inFlight = new Set<Promise<void>>();
     for (const message of messages) {
       if (shuttingDown) {
         break;
       }
-      await handleQueueMessage(config, sqsClient, message);
+
+      const task = handleQueueMessage(config, sqsClient, message).finally(() => {
+        inFlight.delete(task);
+      });
+      inFlight.add(task);
+
+      if (inFlight.size >= config.processingConcurrency) {
+        await Promise.race(inFlight);
+      }
+    }
+
+    if (inFlight.size > 0) {
+      await Promise.all(inFlight);
     }
   }
 
@@ -585,10 +600,17 @@ async function processClaimIngestJob(
     secondaryExtractionResult,
   );
 
+  const usedTextractPass =
+    secondaryExtractionResult !== null && selectedExtraction === secondaryExtractionResult;
+
   const extractionSource =
-    secondaryExtractionResult && selectedExtraction === secondaryExtractionResult
-      ? "textract_fallback"
-      : "openai_direct";
+    selectedExtraction.provider === "FALLBACK"
+      ? usedTextractPass
+        ? "fallback_local_textract"
+        : "fallback_local"
+      : usedTextractPass
+        ? "textract_fallback"
+        : "openai_direct";
 
   const extracted = selectedExtraction.extraction;
   const nextStatus =
@@ -610,7 +632,7 @@ async function processClaimIngestJob(
         rawOutput: {
           source: extractionSource,
           fallbackAttempted: shouldAttemptTextract,
-          fallbackUsed: extractionSource === "textract_fallback",
+          fallbackUsed: usedTextractPass,
           inboundTextChars,
           primary: primaryExtractionResult.rawOutput,
           textract: textractMetadata,
@@ -648,7 +670,7 @@ async function processClaimIngestJob(
           source: "worker_extraction",
           extractionId: createdExtraction.id,
           confidence: extracted.confidence,
-          fallbackUsed: extractionSource === "textract_fallback",
+          fallbackUsed: usedTextractPass,
         },
       },
     });
@@ -851,6 +873,7 @@ function loadConfig(): WorkerConfig {
       43200,
     ),
     maxMessages: parseIntegerEnv("CLAIMS_QUEUE_MAX_MESSAGES", 5, 1, 10),
+    processingConcurrency: parseIntegerEnv("CLAIMS_WORKER_CONCURRENCY", 1, 1, 10),
     maxReceiveCount: parseIntegerEnv("CLAIMS_QUEUE_MAX_RECEIVE_COUNT", 5, 1, 1000),
     idleDelayMs: parseIntegerEnv("CLAIMS_QUEUE_IDLE_DELAY_MS", 250, 0, 60_000),
     errorDelayMs: parseIntegerEnv("CLAIMS_QUEUE_ERROR_DELAY_MS", 2_000, 0, 60_000),

@@ -7,6 +7,7 @@ Use this runbook when claim ingest jobs fail repeatedly and are moved to the dea
 ## Prerequisites
 
 - AWS CLI is configured (`aws sts get-caller-identity` succeeds).
+- `jq` is installed (required for the CLI redrive loop in step 3B).
 - You know the queue URLs in `.env`:
   - `CLAIMS_INGEST_QUEUE_URL`
   - `CLAIMS_INGEST_DLQ_URL`
@@ -93,7 +94,9 @@ done
 You can fetch organization-scoped error claims plus latest worker failure metadata:
 
 ```bash
-curl -sS "http://localhost:3000/api/claims/errors?limit=50&search=&created_from=&created_to="
+curl -sS \
+  -H "cookie: claimflow_session=<your_session_cookie>" \
+  "http://localhost:3000/api/claims/errors?limit=50&search=&created_from=&created_to="
 ```
 
 Notes:

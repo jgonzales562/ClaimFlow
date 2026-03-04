@@ -84,9 +84,6 @@ importers:
       '@aws-sdk/client-textract':
         specifier: ^3.876.0
         version: 3.1000.0
-      '@claimflow/shared':
-        specifier: workspace:*
-        version: link:../../packages/shared
       '@prisma/client':
         specifier: ^6.4.1
         version: 6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)
@@ -119,8 +116,6 @@ importers:
       tsx:
         specifier: ^4.19.3
         version: 4.21.0
-
-  packages/shared: {}
 
 packages:
 

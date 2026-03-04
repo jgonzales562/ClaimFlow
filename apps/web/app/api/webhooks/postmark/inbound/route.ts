@@ -17,6 +17,8 @@ import { logError } from "@/lib/observability/log";
 import { captureWebException } from "@/lib/observability/sentry";
 import { putAttachmentObject } from "@/lib/storage/s3";
 
+const ATTACHMENT_PERSIST_CONCURRENCY = 3;
+
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!isAuthorizedRequest(request)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
@@ -421,88 +423,27 @@ async function persistAttachments(input: {
     };
   }
 
-  const errors: Array<{ filename: string; message: string }> = [];
-  let stored = 0;
-
-  for (const attachment of input.attachments) {
-    const attachmentId = randomUUID();
-    const safeFilename = sanitizeFilename(attachment.originalFilename);
-    const fileBuffer = decodeBase64(attachment.base64Content);
-
-    if (!fileBuffer) {
-      await createFailedAttachmentRecord({
+  const results = await mapWithConcurrency(
+    input.attachments,
+    ATTACHMENT_PERSIST_CONCURRENCY,
+    async (attachment) =>
+      persistSingleAttachment({
         organizationId: input.organizationId,
         claimId: input.claimId,
         inboundMessageId: input.inboundMessageId,
-        originalFilename: attachment.originalFilename,
-        contentType: attachment.contentType,
-        byteSize: attachment.byteSize,
-        errorMessage: "Attachment content is not valid base64.",
-      });
-      errors.push({
-        filename: attachment.originalFilename,
-        message: "Attachment content is not valid base64.",
-      });
+        providerMessageId: input.providerMessageId,
+        attachment,
+      }),
+  );
+
+  let stored = 0;
+  const errors: Array<{ filename: string; message: string }> = [];
+  for (const result of results) {
+    if (result.stored) {
+      stored += 1;
       continue;
     }
-
-    const s3Key = buildAttachmentS3Key({
-      organizationId: input.organizationId,
-      claimId: input.claimId,
-      inboundMessageId: input.inboundMessageId,
-      attachmentId,
-      filename: safeFilename,
-    });
-
-    const checksumSha256 = createHash("sha256").update(fileBuffer).digest("hex");
-
-    try {
-      const storedObject = await putAttachmentObject({
-        key: s3Key,
-        body: fileBuffer,
-        contentType: attachment.contentType,
-        metadata: {
-          claim_id: input.claimId,
-          inbound_message_id: input.inboundMessageId,
-          provider_message_id: input.providerMessageId,
-          attachment_id: attachmentId,
-          original_filename: attachment.originalFilename,
-        },
-      });
-
-      await prisma.claimAttachment.create({
-        data: {
-          organizationId: input.organizationId,
-          claimId: input.claimId,
-          inboundMessageId: input.inboundMessageId,
-          uploadStatus: "STORED",
-          originalFilename: attachment.originalFilename,
-          contentType: attachment.contentType,
-          byteSize: fileBuffer.length,
-          checksumSha256,
-          s3Bucket: storedObject.bucket,
-          s3Key: storedObject.key,
-        },
-      });
-
-      stored += 1;
-    } catch (error: unknown) {
-      const message = extractErrorMessage(error);
-      await createFailedAttachmentRecord({
-        organizationId: input.organizationId,
-        claimId: input.claimId,
-        inboundMessageId: input.inboundMessageId,
-        originalFilename: attachment.originalFilename,
-        contentType: attachment.contentType,
-        byteSize: fileBuffer.length,
-        errorMessage: message,
-      });
-
-      errors.push({
-        filename: attachment.originalFilename,
-        message,
-      });
-    }
+    errors.push(result.error);
   }
 
   return {
@@ -511,6 +452,131 @@ async function persistAttachments(input: {
     failed: errors.length,
     errors,
   };
+}
+
+async function persistSingleAttachment(input: {
+  organizationId: string;
+  claimId: string;
+  inboundMessageId: string;
+  providerMessageId: string;
+  attachment: NormalizedPostmarkAttachment;
+}): Promise<
+  { stored: true } | { stored: false; error: { filename: string; message: string } }
+> {
+  const attachment = input.attachment;
+  const attachmentId = randomUUID();
+  const safeFilename = sanitizeFilename(attachment.originalFilename);
+  const fileBuffer = decodeBase64(attachment.base64Content);
+
+  if (!fileBuffer) {
+    const message = "Attachment content is not valid base64.";
+    await createFailedAttachmentRecord({
+      organizationId: input.organizationId,
+      claimId: input.claimId,
+      inboundMessageId: input.inboundMessageId,
+      originalFilename: attachment.originalFilename,
+      contentType: attachment.contentType,
+      byteSize: attachment.byteSize,
+      errorMessage: message,
+    });
+    return {
+      stored: false,
+      error: {
+        filename: attachment.originalFilename,
+        message,
+      },
+    };
+  }
+
+  const s3Key = buildAttachmentS3Key({
+    organizationId: input.organizationId,
+    claimId: input.claimId,
+    inboundMessageId: input.inboundMessageId,
+    attachmentId,
+    filename: safeFilename,
+  });
+
+  const checksumSha256 = createHash("sha256").update(fileBuffer).digest("hex");
+
+  try {
+    const storedObject = await putAttachmentObject({
+      key: s3Key,
+      body: fileBuffer,
+      contentType: attachment.contentType,
+      metadata: {
+        claim_id: input.claimId,
+        inbound_message_id: input.inboundMessageId,
+        provider_message_id: input.providerMessageId,
+        attachment_id: attachmentId,
+        original_filename: attachment.originalFilename,
+      },
+    });
+
+    await prisma.claimAttachment.create({
+      data: {
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        inboundMessageId: input.inboundMessageId,
+        uploadStatus: "STORED",
+        originalFilename: attachment.originalFilename,
+        contentType: attachment.contentType,
+        byteSize: fileBuffer.length,
+        checksumSha256,
+        s3Bucket: storedObject.bucket,
+        s3Key: storedObject.key,
+      },
+    });
+
+    return { stored: true };
+  } catch (error: unknown) {
+    const message = extractErrorMessage(error);
+    await createFailedAttachmentRecord({
+      organizationId: input.organizationId,
+      claimId: input.claimId,
+      inboundMessageId: input.inboundMessageId,
+      originalFilename: attachment.originalFilename,
+      contentType: attachment.contentType,
+      byteSize: fileBuffer.length,
+      errorMessage: message,
+    });
+
+    return {
+      stored: false,
+      error: {
+        filename: attachment.originalFilename,
+        message,
+      },
+    };
+  }
+}
+
+async function mapWithConcurrency<TInput, TResult>(
+  items: TInput[],
+  concurrency: number,
+  mapper: (item: TInput, index: number) => Promise<TResult>,
+): Promise<TResult[]> {
+  if (items.length === 0) {
+    return [];
+  }
+
+  const safeConcurrency = Math.max(1, Math.floor(concurrency));
+  const workerCount = Math.min(safeConcurrency, items.length);
+  const results = new Array<TResult>(items.length);
+  let nextIndex = 0;
+
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const currentIndex = nextIndex;
+      if (currentIndex >= items.length) {
+        return;
+      }
+      nextIndex += 1;
+      results[currentIndex] = await mapper(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
 }
 
 async function createFailedAttachmentRecord(input: {

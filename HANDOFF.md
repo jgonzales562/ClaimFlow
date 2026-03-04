@@ -2,8 +2,9 @@
 
 ## Project Snapshot
 - Repository: `ClaimFlow`
-- Active branch: `main`
-- Latest commit: `86b571d` (`feat: implement ingestion pipeline with attachments, queue worker, and extraction`)
+- Active branch: `main` (expected)
+- Current HEAD: run `git rev-parse --short HEAD` in your clone for exact revision
+- Last updated: 2026-03-04
 - Plan doc: `IMPLEMENTATION_PLAN_V1.md`
 
 ## Milestone Status
@@ -14,19 +15,26 @@
 - Ticket 5: Done (S3 attachment persistence + metadata).
 - Ticket 6: Done (SQS enqueue + worker consumer + DLQ handling).
 - Ticket 7: Done (structured extraction service + `ClaimExtraction` persistence).
-- Ticket 8: Next (Textract OCR fallback).
+- Ticket 8: Done (Textract OCR fallback and extraction source metadata).
+- Ticket 9: Done (dashboard list/detail with review workflow).
+- Ticket 10: Done (claim export and observability baseline).
 
-## Infrastructure (Dev)
-- AWS region: `us-west-2`
-- S3 bucket: `claimflow-attachments-dev-754417747596`
-- S3 prefix: `claimflow`
-- SQS main queue: `claimflow-ingest-dev`
-  - URL: `https://us-west-2.queue.amazonaws.com/754417747596/claimflow-ingest-dev`
-- SQS DLQ: `claimflow-ingest-dev-dlq`
-  - URL: `https://us-west-2.queue.amazonaws.com/754417747596/claimflow-ingest-dev-dlq`
-- Main queue redrive policy:
-  - Dead-letter target: `claimflow-ingest-dev-dlq`
-  - `maxReceiveCount`: `5`
+## Repository Layout (Current)
+- `apps/web`: Next.js app (dashboard + API routes).
+- `apps/worker`: queue consumer + extraction pipeline.
+- `packages/db`: Prisma schema, migrations, seed, Prisma client package.
+- `docs/runbooks`: operational procedures.
+
+## API Surface (Current)
+- Auth:
+  - `POST /api/auth/login`
+  - `POST /api/auth/logout`
+- Claims:
+  - `GET /api/claims/export`
+  - `GET /api/claims/errors`
+  - `GET /api/claims/[claimId]/attachments/[attachmentId]/download`
+- Inbound:
+  - `POST /api/webhooks/postmark/inbound`
 
 ## Database Changes Implemented
 - `ClaimAttachment` table and enums:
@@ -38,7 +46,7 @@
 
 ## Runtime Behavior (Current)
 - Webhook route:
-  - Validates basic auth.
+  - Validates HTTP basic auth (`POSTMARK_WEBHOOK_BASIC_AUTH_USER/PASS`).
   - Parses Postmark payload.
   - Resolves org by mailbox hash/fallback slug.
   - Enforces idempotency by `(organizationId, provider, providerMessageId)`.
@@ -56,7 +64,7 @@
     - retries by leaving message in queue.
     - moves to DLQ when non-retryable or receive count threshold is reached.
 
-## Extraction Behavior (Ticket 7)
+## Extraction Behavior
 - Module: `apps/worker/src/extraction.ts`
 - OpenAI structured output path:
   - Uses JSON schema + Zod validation.
@@ -68,15 +76,6 @@
 ## Environment Setup
 Use `.env.example` as source of truth. Never commit `.env`.
 
-Current local status on this machine:
-- OpenAI extraction variables have been set in local `.env`:
-  - `OPENAI_API_KEY`
-  - `OPENAI_MODEL=gpt-4o-mini`
-  - `CLAIMS_EXTRACTION_READY_CONFIDENCE=0.85`
-  - `CLAIMS_EXTRACTION_MAX_INPUT_CHARS=12000`
-- The secret key value is intentionally not stored in this repo/handoff file.
-- On the next device, set these same variables manually in `.env` from your secret source.
-
 Important variables for end-to-end:
 - `DATABASE_URL`
 - `SESSION_SECRET`
@@ -86,12 +85,28 @@ Important variables for end-to-end:
 - `AWS_REGION`
 - `ATTACHMENTS_S3_BUCKET`
 - `ATTACHMENTS_S3_PREFIX`
+- `ATTACHMENTS_SIGNED_URL_TTL_SECONDS`
 - `CLAIMS_INGEST_QUEUE_URL`
 - `CLAIMS_INGEST_DLQ_URL`
-- `OPENAI_API_KEY` (required for real model extraction; fallback is used when absent)
-- `OPENAI_MODEL` (default `gpt-4o-mini`)
+- `CLAIMS_QUEUE_POLL_WAIT_SECONDS`
+- `CLAIMS_QUEUE_MAX_MESSAGES`
+- `CLAIMS_QUEUE_MAX_RECEIVE_COUNT`
+- `CLAIMS_QUEUE_VISIBILITY_TIMEOUT_SECONDS`
+- `CLAIMS_QUEUE_IDLE_DELAY_MS`
+- `CLAIMS_QUEUE_ERROR_DELAY_MS`
+- `OPENAI_API_KEY` (optional; fallback extraction is used when absent)
+- `OPENAI_MODEL`
 - `CLAIMS_EXTRACTION_READY_CONFIDENCE`
 - `CLAIMS_EXTRACTION_MAX_INPUT_CHARS`
+- `CLAIMS_TEXTRACT_FALLBACK_ENABLED`
+- `CLAIMS_TEXTRACT_FALLBACK_CONFIDENCE_THRESHOLD`
+- `CLAIMS_TEXTRACT_FALLBACK_MISSING_INFO_COUNT`
+- `CLAIMS_TEXTRACT_FALLBACK_MIN_INBOUND_CHARS`
+- `CLAIMS_TEXTRACT_MAX_ATTACHMENTS`
+- `CLAIMS_TEXTRACT_MAX_TEXT_CHARS`
+- `SENTRY_DSN`
+- `SENTRY_ENVIRONMENT`
+- `SENTRY_TRACES_SAMPLE_RATE`
 
 ## Bring-Up on Another Device
 1. Clone repo and checkout `main`.
@@ -105,25 +120,8 @@ Important variables for end-to-end:
 ## Recommended Codex Bootstrap Prompt (Next Device)
 Use this as the first prompt:
 
-`Read IMPLEMENTATION_PLAN_V1.md and HANDOFF.md, run git status, then continue with Ticket 8 (Textract OCR fallback) using the existing worker pipeline and claim_extractions model.`
-
-## Next Task: Ticket 8 (OCR Fallback with Textract)
-Target outcomes:
-- Detect low-quality extraction outcomes (low confidence or poor text quality).
-- Run AWS Textract for attachments that need OCR.
-- Re-run structured extraction using Textract text.
-- Persist fallback usage and confidence source in `ClaimExtraction` output/metadata.
-- Keep retry/DLQ behavior safe and deterministic.
-
-Suggested implementation shape:
-- Add Textract client/service in worker.
-- Add text quality gate before final status assignment.
-- Update extraction pipeline to support second-pass extraction source.
-- Extend `ClaimExtraction.rawOutput` with fields like:
-  - `source: "openai_direct" | "textract_fallback"`
-  - `fallbackUsed: boolean`
-  - `textractDocumentCount`
+`Read IMPLEMENTATION_PLAN_V1.md and HANDOFF.md, run git status, then continue with V1 hardening tasks (tests, monitoring refinements, and operational runbooks).`
 
 ## Known Non-Blocking Notes
 - Next build logs a warning about Next ESLint plugin detection in custom ESLint config.
-- Worker logs an SQS endpoint warning about QueueUrl host resolution; functionality is working.
+- Next build logs Sentry/OpenTelemetry "critical dependency" warnings from upstream packages.
