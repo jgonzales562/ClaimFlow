@@ -13,6 +13,8 @@ import {
   type PostmarkInboundPayload,
 } from "@/lib/postmark/inbound";
 import { enqueueClaimIngestJob, type ClaimQueueEnqueueResult } from "@/lib/queue/claims";
+import { logError } from "@/lib/observability/log";
+import { captureWebException } from "@/lib/observability/sentry";
 import { putAttachmentObject } from "@/lib/storage/s3";
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
@@ -73,7 +75,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
 
     if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-      console.error("Failed to enqueue deduplicated claim ingest job", {
+      logError("webhook_enqueue_deduplicated_failed", {
         organizationId: organization.id,
         claimId: existingMessage.claimId,
         messageId: existingMessage.id,
@@ -165,7 +167,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     });
 
     if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-      console.error("Failed to enqueue claim ingest job", {
+      logError("webhook_enqueue_claim_failed", {
         organizationId: organization.id,
         claimId: created.claimId,
         messageId: created.messageId,
@@ -223,7 +225,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
         });
 
         if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-          console.error("Failed to enqueue deduplicated claim ingest job", {
+          logError("webhook_enqueue_deduplicated_race_failed", {
             organizationId: organization.id,
             claimId: deduplicated.claimId,
             messageId: deduplicated.id,
@@ -251,7 +253,18 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       }
     }
 
-    console.error("Failed to process Postmark inbound webhook", error);
+    captureWebException(error, {
+      route: "/api/webhooks/postmark/inbound",
+      organizationId: organization.id,
+      providerMessageId,
+    });
+
+    logError("webhook_process_failed", {
+      organizationId: organization.id,
+      providerMessageId,
+      error: extractErrorMessage(error),
+    });
+
     return NextResponse.json({ error: "Unable to process inbound message" }, { status: 500 });
   }
 }

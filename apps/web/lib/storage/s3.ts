@@ -1,4 +1,5 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 type PutAttachmentObjectInput = {
   key: string;
@@ -10,6 +11,15 @@ type PutAttachmentObjectInput = {
 type AttachmentStorageConfig = {
   bucket: string;
   prefix: string;
+};
+
+type SignedAttachmentAccessInput = {
+  bucket: string;
+  key: string;
+  filename: string;
+  contentType: string | null;
+  expiresInSeconds?: number;
+  disposition?: "attachment" | "inline";
 };
 
 let clientSingleton: S3Client | undefined;
@@ -37,6 +47,27 @@ export async function putAttachmentObject(input: PutAttachmentObjectInput): Prom
     bucket: config.bucket,
     key: fullKey,
   };
+}
+
+export async function createSignedAttachmentAccessUrl(
+  input: SignedAttachmentAccessInput,
+): Promise<string> {
+  const client = getS3Client();
+  const expiresIn = clampSignedUrlTtlSeconds(input.expiresInSeconds ?? 300);
+  const filename = sanitizeFilenameForContentDisposition(input.filename);
+  const disposition = input.disposition ?? "attachment";
+  const command = new GetObjectCommand({
+    Bucket: input.bucket,
+    Key: input.key,
+    ResponseContentType: input.contentType ?? "application/octet-stream",
+    ResponseContentDisposition: `${disposition}; filename="${filename}"`,
+  });
+
+  // pnpm can install parallel Smithy type trees across AWS SDK packages.
+  // Runtime is compatible; bridge types for getSignedUrl.
+  const signerClient = client as unknown as Parameters<typeof getSignedUrl>[0];
+  const signerCommand = command as unknown as Parameters<typeof getSignedUrl>[1];
+  return getSignedUrl(signerClient, signerCommand, { expiresIn });
 }
 
 function getS3Client(): S3Client {
@@ -69,4 +100,21 @@ function getAttachmentStorageConfig(): AttachmentStorageConfig {
 
 function trimSlashes(value: string): string {
   return value.replace(/^\/+|\/+$/g, "");
+}
+
+function clampSignedUrlTtlSeconds(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 300;
+  }
+
+  return Math.min(Math.max(Math.floor(value), 60), 3600);
+}
+
+function sanitizeFilenameForContentDisposition(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "attachment.bin";
+  }
+
+  return trimmed.replace(/["\r\n]/g, "_").slice(0, 180);
 }

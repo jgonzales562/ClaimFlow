@@ -2,6 +2,13 @@ import { prisma } from "@claimflow/db";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import {
+  buildClaimWhereInput,
+  clampLimit,
+  parseClaimFiltersFromUrlSearchParams,
+} from "@/lib/claims/filters";
+import { captureWebException } from "@/lib/observability/sentry";
+import { extractErrorMessage, logError } from "@/lib/observability/log";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   const auth = await getAuthContext();
@@ -13,32 +20,52 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const limitParam = Number.parseInt(request.nextUrl.searchParams.get("limit") ?? "25", 10);
-  const limit = Number.isNaN(limitParam) ? 25 : Math.min(Math.max(limitParam, 1), 100);
+  try {
+    const limit = clampLimit(request.nextUrl.searchParams.get("limit"), 25, 1, 100);
+    const filters = parseClaimFiltersFromUrlSearchParams(request.nextUrl.searchParams);
 
-  const claims = await prisma.claim.findMany({
-    where: {
+    const claims = await prisma.claim.findMany({
+      where: buildClaimWhereInput(auth.organizationId, filters),
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: limit,
+      select: {
+        id: true,
+        externalClaimId: true,
+        customerName: true,
+        productName: true,
+        status: true,
+        warrantyStatus: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return NextResponse.json({
+      claims,
+      count: claims.length,
       organizationId: auth.organizationId,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-    take: limit,
-    select: {
-      id: true,
-      externalClaimId: true,
-      customerName: true,
-      productName: true,
-      status: true,
-      warrantyStatus: true,
-      createdAt: true,
-      updatedAt: true,
-    },
-  });
+      filters: {
+        status: filters.status,
+        search: filters.search,
+        createdFrom: filters.createdFrom?.toISOString().slice(0, 10) ?? null,
+        createdTo: filters.createdTo?.toISOString().slice(0, 10) ?? null,
+      },
+    });
+  } catch (error: unknown) {
+    captureWebException(error, {
+      route: "/api/claims",
+      organizationId: auth.organizationId,
+      userId: auth.userId,
+    });
 
-  return NextResponse.json({
-    claims,
-    count: claims.length,
-    organizationId: auth.organizationId,
-  });
+    logError("claims_list_failed", {
+      organizationId: auth.organizationId,
+      userId: auth.userId,
+      error: extractErrorMessage(error),
+    });
+
+    return NextResponse.json({ error: "Unable to fetch claims" }, { status: 500 });
+  }
 }

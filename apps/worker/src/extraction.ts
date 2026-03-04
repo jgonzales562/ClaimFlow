@@ -30,6 +30,7 @@ type ClaimExtractionInput = {
   textBody: string | null;
   strippedTextReply: string | null;
   claimIssueSummary: string | null;
+  supplementalText: string | null;
 };
 
 type ClaimExtractionConfig = {
@@ -119,6 +120,7 @@ export async function extractClaimData(
       strippedTextReply: input.strippedTextReply,
       textBody: truncate(input.textBody, config.maxInputChars),
       claimIssueSummary: input.claimIssueSummary,
+      supplementalText: truncate(input.supplementalText, config.maxInputChars),
     },
     null,
     2,
@@ -201,6 +203,7 @@ function getOpenAiClient(apiKey: string): OpenAI {
 
 function fallbackExtractionFromInbound(input: ClaimExtractionInput): ClaimExtractionPayload {
   const issueSummary = firstNonEmpty(
+    input.supplementalText,
     input.claimIssueSummary,
     input.strippedTextReply,
     input.textBody,

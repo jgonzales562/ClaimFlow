@@ -46,6 +46,11 @@ enum ClaimExtractionProvider {
   FALLBACK
 }
 
+enum ClaimEventType {
+  MANUAL_EDIT
+  STATUS_TRANSITION
+}
+
 model Organization {
   id                 String               @id @default(cuid())
   name               String
@@ -58,6 +63,7 @@ model Organization {
   inboundMessages    InboundMessage[]
   claimAttachments   ClaimAttachment[]
   claimExtractions   ClaimExtraction[]
+  claimEvents        ClaimEvent[]
 }
 
 model User {
@@ -69,6 +75,7 @@ model User {
   updatedAt     DateTime     @updatedAt
   memberships   Membership[]
   createdClaims Claim[]      @relation("ClaimCreatedBy")
+  claimEvents   ClaimEvent[] @relation("ClaimEventActor")
 }
 
 model Membership {
@@ -106,6 +113,7 @@ model Claim {
   inboundMessages InboundMessage[]
   attachments     ClaimAttachment[]
   extractions     ClaimExtraction[]
+  events          ClaimEvent[]
 
   @@unique([organizationId, externalClaimId])
   @@index([organizationId, status, createdAt])
@@ -194,4 +202,21 @@ model ClaimExtraction {
   @@index([organizationId, createdAt])
   @@index([claimId, createdAt])
   @@index([inboundMessageId])
+}
+
+model ClaimEvent {
+  id             String         @id @default(cuid())
+  organizationId String
+  claimId        String
+  actorUserId    String?
+  eventType      ClaimEventType
+  payload        Json
+  createdAt      DateTime       @default(now())
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim          Claim          @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  actorUser      User?          @relation("ClaimEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([claimId, createdAt])
+  @@index([actorUserId, createdAt])
 }
