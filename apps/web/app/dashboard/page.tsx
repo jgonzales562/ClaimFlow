@@ -2,7 +2,7 @@ import { prisma } from "@claimflow/db";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { CSSProperties } from "react";
-import { getAuthContext } from "@/lib/auth/server";
+import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import {
   buildClaimWhereInput,
   CLAIM_STATUSES,
@@ -20,6 +20,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   if (!auth) {
     redirect("/login");
   }
+  const canAccessErrorTriage = hasMinimumRole(auth.role, "ADMIN");
 
   const resolvedSearchParams = (await searchParams) ?? {};
   const filters = parseClaimFiltersFromRecord(resolvedSearchParams);
@@ -64,11 +65,18 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             {auth.organizationName} ({auth.role}) - signed in as {auth.email}
           </p>
         </div>
-        <form action="/api/auth/logout" method="post">
-          <button type="submit" style={secondaryButtonStyle}>
-            Sign out
-          </button>
-        </form>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {canAccessErrorTriage ? (
+            <Link href="/dashboard/errors" style={linkButtonStyle}>
+              Error Triage
+            </Link>
+          ) : null}
+          <form action="/api/auth/logout" method="post">
+            <button type="submit" style={secondaryButtonStyle}>
+              Sign out
+            </button>
+          </form>
+        </div>
       </header>
 
       <section
