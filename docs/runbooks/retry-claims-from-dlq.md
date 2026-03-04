@@ -88,7 +88,20 @@ done
 - Confirm claim status changes from `ERROR/PROCESSING` to `REVIEW_REQUIRED` or `READY` in dashboard.
 - Re-check DLQ depth (step 1) until near zero.
 
-## 5. Escalation Criteria
+## 5. Optional API Triage View
+
+You can fetch organization-scoped error claims plus latest worker failure metadata:
+
+```bash
+curl -sS "http://localhost:3000/api/claims/errors?limit=50&search=&created_from=&created_to="
+```
+
+Notes:
+
+- Requires an authenticated session with `ADMIN` or `OWNER` role.
+- Response includes `failure.reason`, `failure.retryable`, `failure.receiveCount`, and `failure.failureDisposition` when available.
+
+## 6. Escalation Criteria
 
 Escalate if any of these are true:
 
