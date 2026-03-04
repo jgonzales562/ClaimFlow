@@ -83,7 +83,10 @@ function getSqsClient(): SQSClient {
     throw new Error("AWS_REGION is required when using SQS.");
   }
 
-  sqsClientSingleton = new SQSClient({ region });
+  sqsClientSingleton = new SQSClient({
+    region,
+    useQueueUrlAsEndpoint: false,
+  });
   return sqsClientSingleton;
 }
 

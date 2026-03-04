@@ -56,6 +56,8 @@ class WorkerMessageError extends Error {
   }
 }
 
+let workerSentryEnabled = false;
+
 void bootstrap();
 
 async function bootstrap(): Promise<void> {
@@ -72,7 +74,10 @@ async function bootstrap(): Promise<void> {
       captureWorkerException(reason, { stage: "unhandled_rejection" });
       logError("worker_unhandled_rejection", { error: extractErrorMessage(reason) });
     });
-    const sqsClient = new SQSClient({ region: config.awsRegion });
+    const sqsClient = new SQSClient({
+      region: config.awsRegion,
+      useQueueUrlAsEndpoint: false,
+    });
     await runWorkerLoop(config, sqsClient);
   } catch (error: unknown) {
     captureWorkerException(error, {
@@ -869,8 +874,6 @@ function extractErrorMessage(error: unknown): string {
   }
   return "Unknown error.";
 }
-
-let workerSentryEnabled = false;
 
 function initWorkerSentry(config: WorkerConfig): void {
   if (!config.sentryDsn || workerSentryEnabled) {
