@@ -472,7 +472,8 @@ function describeEvent(eventType: string, payload: unknown): string {
   if (eventType === "STATUS_TRANSITION") {
     const fromStatus = typeof record.fromStatus === "string" ? record.fromStatus : "unknown";
     const toStatus = typeof record.toStatus === "string" ? record.toStatus : "unknown";
-    return `${fromStatus} -> ${toStatus}`;
+    const source = typeof record.source === "string" ? record.source : null;
+    return source ? `${fromStatus} -> ${toStatus} (${source})` : `${fromStatus} -> ${toStatus}`;
   }
 
   if (eventType === "MANUAL_EDIT") {

@@ -261,6 +261,17 @@ async function handleProcessingFailure(input: {
     });
 
     if (moved) {
+      if (queueMessage) {
+        await markClaimAsError({
+          claimId: queueMessage.claimId,
+          organizationId: queueMessage.organizationId,
+          reason: input.reason,
+          retryable: input.retryable,
+          receiveCount: input.receiveCount,
+          failureDisposition: "moved_to_dlq",
+        });
+      }
+
       await deleteMessageFromQueue({
         sqsClient: input.sqsClient,
         queueUrl: input.config.queueUrl,
@@ -279,6 +290,17 @@ async function handleProcessingFailure(input: {
   }
 
   if (!input.retryable && !input.config.dlqUrl) {
+    if (queueMessage) {
+      await markClaimAsError({
+        claimId: queueMessage.claimId,
+        organizationId: queueMessage.organizationId,
+        reason: input.reason,
+        retryable: input.retryable,
+        receiveCount: input.receiveCount,
+        failureDisposition: "dropped_non_retryable",
+      });
+    }
+
     await deleteMessageFromQueue({
       sqsClient: input.sqsClient,
       queueUrl: input.config.queueUrl,
@@ -406,10 +428,29 @@ async function processClaimIngestJob(
     return;
   }
 
-  await prisma.claim.update({
-    where: { id: claim.id },
-    data: { status: "PROCESSING" },
-  });
+  if (claim.status !== "PROCESSING") {
+    await prisma.$transaction(async (tx) => {
+      await tx.claim.update({
+        where: { id: claim.id },
+        data: { status: "PROCESSING" },
+      });
+
+      await tx.claimEvent.create({
+        data: {
+          organizationId: claim.organizationId,
+          claimId: claim.id,
+          eventType: "STATUS_TRANSITION",
+          payload: {
+            fromStatus: claim.status,
+            toStatus: "PROCESSING",
+            source: "worker_ingest_start",
+            inboundMessageId: message.inboundMessageId,
+            providerMessageId: message.providerMessageId,
+          },
+        },
+      });
+    });
+  }
 
   const inboundMessage = await prisma.inboundMessage.findUnique({
     where: { id: message.inboundMessageId },
@@ -556,7 +597,7 @@ async function processClaimIngestJob(
       : "REVIEW_REQUIRED";
 
   await prisma.$transaction(async (tx) => {
-    await tx.claimExtraction.create({
+    const createdExtraction = await tx.claimExtraction.create({
       data: {
         organizationId: claim.organizationId,
         claimId: claim.id,
@@ -576,6 +617,9 @@ async function processClaimIngestJob(
           textractPass: secondaryExtractionResult?.rawOutput ?? null,
         } as Prisma.InputJsonValue,
       },
+      select: {
+        id: true,
+      },
     });
 
     await tx.claim.update({
@@ -590,6 +634,68 @@ async function processClaimIngestJob(
         warrantyStatus: extracted.warrantyStatus,
         missingInfo: extracted.missingInfo,
         status: nextStatus,
+      },
+    });
+
+    await tx.claimEvent.create({
+      data: {
+        organizationId: claim.organizationId,
+        claimId: claim.id,
+        eventType: "STATUS_TRANSITION",
+        payload: {
+          fromStatus: "PROCESSING",
+          toStatus: nextStatus,
+          source: "worker_extraction",
+          extractionId: createdExtraction.id,
+          confidence: extracted.confidence,
+          fallbackUsed: extractionSource === "textract_fallback",
+        },
+      },
+    });
+  });
+}
+
+async function markClaimAsError(input: {
+  claimId: string;
+  organizationId: string;
+  reason: string;
+  retryable: boolean;
+  receiveCount: number;
+  failureDisposition: "moved_to_dlq" | "dropped_non_retryable";
+}): Promise<void> {
+  await prisma.$transaction(async (tx) => {
+    const claim = await tx.claim.findUnique({
+      where: { id: input.claimId },
+      select: {
+        id: true,
+        organizationId: true,
+        status: true,
+      },
+    });
+
+    if (!claim || claim.organizationId !== input.organizationId || claim.status === "ERROR") {
+      return;
+    }
+
+    await tx.claim.update({
+      where: { id: claim.id },
+      data: { status: "ERROR" },
+    });
+
+    await tx.claimEvent.create({
+      data: {
+        organizationId: claim.organizationId,
+        claimId: claim.id,
+        eventType: "STATUS_TRANSITION",
+        payload: {
+          fromStatus: claim.status,
+          toStatus: "ERROR",
+          source: "worker_failure",
+          failureDisposition: input.failureDisposition,
+          receiveCount: input.receiveCount,
+          retryable: input.retryable,
+          reason: input.reason,
+        },
       },
     });
   });

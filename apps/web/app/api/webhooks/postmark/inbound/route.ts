@@ -362,18 +362,43 @@ async function maybeEnqueueClaimForProcessing(input: {
   if (!input.claimId || !input.shouldEnqueue) {
     return null;
   }
+  const claimId = input.claimId;
 
   const queueResult = await enqueueClaimIngestJob({
-    claimId: input.claimId,
+    claimId,
     organizationId: input.organizationId,
     inboundMessageId: input.inboundMessageId,
     providerMessageId: input.providerMessageId,
   });
 
   if (queueResult.enqueued) {
-    await prisma.claim.update({
-      where: { id: input.claimId },
-      data: { status: "PROCESSING" },
+    await prisma.$transaction(async (tx) => {
+      const transition = await tx.claim.updateMany({
+        where: {
+          id: claimId,
+          organizationId: input.organizationId,
+          status: "NEW",
+        },
+        data: { status: "PROCESSING" },
+      });
+
+      if (transition.count === 1) {
+        await tx.claimEvent.create({
+          data: {
+            organizationId: input.organizationId,
+            claimId,
+            eventType: "STATUS_TRANSITION",
+            payload: {
+              fromStatus: "NEW",
+              toStatus: "PROCESSING",
+              source: "webhook_enqueue",
+              inboundMessageId: input.inboundMessageId,
+              providerMessageId: input.providerMessageId,
+              queueMessageId: queueResult.messageId,
+            },
+          },
+        });
+      }
     });
   }
 
