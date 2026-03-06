@@ -62,7 +62,36 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
     loadError = "Unable to load error claims.";
   }
 
-  const retryableCount = payload?.claims.filter((claim) => claim.failure?.retryable).length ?? 0;
+  const pageClaims = payload?.claims ?? [];
+  const retryableCount = pageClaims.filter((claim) => claim.failure?.retryable === true).length;
+  const nonRetryableCount = pageClaims.filter((claim) => claim.failure?.retryable === false).length;
+  const unknownRetryabilityCount = pageClaims.filter(
+    (claim) => claim.failure?.retryable == null,
+  ).length;
+  const highestReceiveCount = pageClaims.reduce((highest, claim) => {
+    const current = claim.failure?.receiveCount ?? 0;
+    return current > highest ? current : highest;
+  }, 0);
+  const retryabilityBreakdown = [
+    {
+      label: "Retryable",
+      count: retryableCount,
+      percent: toPercent(retryableCount, pageClaims.length),
+      tone: "success",
+    },
+    {
+      label: "Non-retryable",
+      count: nonRetryableCount,
+      percent: toPercent(nonRetryableCount, pageClaims.length),
+      tone: "danger",
+    },
+    {
+      label: "Unknown",
+      count: unknownRetryabilityCount,
+      percent: toPercent(unknownRetryabilityCount, pageClaims.length),
+      tone: "neutral",
+    },
+  ] as const;
 
   return (
     <main className="app-shell app-shell--wide page-stack">
@@ -114,6 +143,92 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
           <p className="stat-label">Page limit</p>
           <strong className="stat-value">{filters.limit}</strong>
           <p className="stat-note">Current fetch size for triage paging and review workflow.</p>
+        </article>
+      </section>
+
+      <section className="insight-grid">
+        <article className="surface-card panel section-stack">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">Retryability mix</p>
+              <h2 className="section-title">Current page breakdown</h2>
+              <p className="section-copy">
+                This page groups visible error claims by whether they appear retryable, blocked, or
+                still ambiguous.
+              </p>
+            </div>
+          </div>
+
+          <div className="workflow-list">
+            {retryabilityBreakdown.map((entry) => (
+              <div className="workflow-row" key={entry.label}>
+                <div className="workflow-heading">
+                  <div className="cluster">
+                    <span className={cx("pill", `pill--${entry.tone}`)}>{entry.label}</span>
+                    <p className="workflow-meta">
+                      {entry.count} claim{entry.count === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <span className="workflow-percent">{formatPercent(entry.percent)}</span>
+                </div>
+                <div className="workflow-track" aria-hidden="true">
+                  <div
+                    className={cx("workflow-fill", `workflow-fill--${entry.tone}`)}
+                    style={{ width: `${entry.count > 0 ? Math.max(entry.percent, 4) : 0}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="surface-card panel section-stack">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">Triage notes</p>
+              <h2 className="section-title">Exception pressure</h2>
+              <p className="section-copy">
+                Page-level signals to help prioritize which failures should get first attention.
+              </p>
+            </div>
+          </div>
+
+          <div className="glance-grid">
+            <article className="glance-card glance-card--success">
+              <p className="glance-label">Retryable share</p>
+              <h3 className="glance-value">
+                {formatPercent(toPercent(retryableCount, pageClaims.length))}
+              </h3>
+              <p className="glance-copy">
+                Start here if you want the fastest path to clearing the visible error queue.
+              </p>
+            </article>
+
+            <article className="glance-card glance-card--danger">
+              <p className="glance-label">Hard failures</p>
+              <h3 className="glance-value">{nonRetryableCount}</h3>
+              <p className="glance-copy">
+                Claims on this page that likely need investigation or manual correction.
+              </p>
+            </article>
+
+            <article className="glance-card glance-card--neutral">
+              <p className="glance-label">Unknown retryability</p>
+              <h3 className="glance-value">{unknownRetryabilityCount}</h3>
+              <p className="glance-copy">
+                Failures without enough context yet to classify as recoverable or blocked.
+              </p>
+            </article>
+
+            <article className="glance-card glance-card--warning">
+              <p className="glance-label">Highest receive count</p>
+              <h3 className="glance-value">{highestReceiveCount}</h3>
+              <p className="glance-copy">
+                The most repeated receive count among the visible failures, useful for spotting
+                noisy retries.
+              </p>
+            </article>
+          </div>
         </article>
       </section>
 
@@ -325,4 +440,16 @@ function buildErrorClaimsHref(
   params.set("cursor", cursor);
   params.set("direction", direction);
   return `/dashboard/errors?${params.toString()}`;
+}
+
+function toPercent(count: number, total: number): number {
+  if (total === 0) {
+    return 0;
+  }
+
+  return Math.round((count / total) * 100);
+}
+
+function formatPercent(value: number): string {
+  return `${value}%`;
 }

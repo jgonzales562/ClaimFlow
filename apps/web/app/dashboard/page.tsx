@@ -91,15 +91,41 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   }, {});
 
   const totalClaims = groupedCounts.reduce((sum, entry) => sum + entry._count._all, 0);
+  const newCount = statusCounts.NEW ?? 0;
+  const processingCount = statusCounts.PROCESSING ?? 0;
   const reviewRequiredCount = statusCounts.REVIEW_REQUIRED ?? 0;
   const readyCount = statusCounts.READY ?? 0;
   const errorCount = statusCounts.ERROR ?? 0;
+  const intakeCount = newCount + processingCount;
   const activeFilterCount = [
     filters.search,
     filters.status,
     filters.createdFrom,
     filters.createdTo,
   ].filter(Boolean).length;
+  const workflowBreakdown = CLAIM_STATUSES.map((status) => {
+    const count = statusCounts[status] ?? 0;
+    return {
+      status,
+      label: formatTokenLabel(status),
+      count,
+      percent: toPercent(count, totalClaims),
+      tone: getClaimStatusTone(status),
+    };
+  });
+  const dominantStage = workflowBreakdown.reduce(
+    (current, entry) => (entry.count > current.count ? entry : current),
+    workflowBreakdown[0] ?? {
+      status: "NEW",
+      label: "No claims",
+      count: 0,
+      percent: 0,
+      tone: "neutral",
+    },
+  );
+  const intakeShare = toPercent(intakeCount, totalClaims);
+  const reviewLoadShare = toPercent(reviewRequiredCount + errorCount, totalClaims);
+  const readyShare = toPercent(readyCount, totalClaims);
 
   const hasMoreInDirection = claimsWindow.length > DASHBOARD_PAGE_SIZE;
   const pageSlice = hasMoreInDirection ? claimsWindow.slice(0, DASHBOARD_PAGE_SIZE) : claimsWindow;
@@ -188,6 +214,100 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               ? "Open the triage queue for failures that need intervention."
               : "Claims currently in an error state."}
           </p>
+        </article>
+      </section>
+
+      <section className="insight-grid">
+        <article className="surface-card panel section-stack">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">Workflow mix</p>
+              <h2 className="section-title">Queue distribution</h2>
+              <p className="section-copy">
+                Status mix across the entire organization queue, useful for spotting where work is
+                pooling before you drill into individual claims.
+              </p>
+            </div>
+          </div>
+
+          <div className="workflow-list">
+            {workflowBreakdown.map((entry) => (
+              <div className="workflow-row" key={entry.status}>
+                <div className="workflow-heading">
+                  <div className="cluster">
+                    <span className={cx("pill", `pill--${entry.tone}`)}>{entry.label}</span>
+                    <p className="workflow-meta">
+                      {numberFormatter.format(entry.count)} claim{entry.count === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <span className="workflow-percent">{formatPercent(entry.percent)}</span>
+                </div>
+                <div className="workflow-track" aria-hidden="true">
+                  <div
+                    className={cx("workflow-fill", `workflow-fill--${entry.tone}`)}
+                    style={{ width: `${entry.count > 0 ? Math.max(entry.percent, 4) : 0}%` }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
+
+        <article className="surface-card panel section-stack">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">Operating picture</p>
+              <h2 className="section-title">At-a-glance posture</h2>
+              <p className="section-copy">
+                A quick read on how much of the queue is still in intake, under manual attention, or
+                ready to move forward.
+              </p>
+            </div>
+          </div>
+
+          <div className="glance-grid">
+            <article className="glance-card glance-card--info">
+              <p className="glance-label">Intake share</p>
+              <h3 className="glance-value">{formatPercent(intakeShare)}</h3>
+              <p className="glance-copy">
+                {numberFormatter.format(intakeCount)} claims are still in new or processing states.
+              </p>
+            </article>
+
+            <article
+              className={cx(
+                "glance-card",
+                `glance-card--${dominantStage.count > 0 ? dominantStage.tone : "neutral"}`,
+              )}
+            >
+              <p className="glance-label">Dominant stage</p>
+              <h3 className="glance-value">
+                {dominantStage.count > 0 ? dominantStage.label : "No claims"}
+              </h3>
+              <p className="glance-copy">
+                {dominantStage.count > 0
+                  ? `${numberFormatter.format(dominantStage.count)} claims currently sit in the largest queue segment.`
+                  : "No claims have been recorded yet."}
+              </p>
+            </article>
+
+            <article className="glance-card glance-card--warning">
+              <p className="glance-label">Analyst load</p>
+              <h3 className="glance-value">{formatPercent(reviewLoadShare)}</h3>
+              <p className="glance-copy">
+                {numberFormatter.format(reviewRequiredCount + errorCount)} claims either need review
+                or are blocked by an exception.
+              </p>
+            </article>
+
+            <article className="glance-card glance-card--success">
+              <p className="glance-label">Ready rate</p>
+              <h3 className="glance-value">{formatPercent(readyShare)}</h3>
+              <p className="glance-copy">
+                {numberFormatter.format(readyCount)} claims are ready to move without more cleanup.
+              </p>
+            </article>
+          </div>
         </article>
       </section>
 
@@ -381,4 +501,16 @@ function buildDashboardPageHref(
   params.set("cursor", cursor);
   params.set("direction", direction);
   return `/dashboard?${params.toString()}`;
+}
+
+function toPercent(count: number, total: number): number {
+  if (total === 0) {
+    return 0;
+  }
+
+  return Math.round((count / total) * 100);
+}
+
+function formatPercent(value: number): string {
+  return `${value}%`;
 }

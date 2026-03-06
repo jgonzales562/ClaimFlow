@@ -103,6 +103,10 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
 
   const latestExtraction = claim.extractions[0] ?? null;
   const claimReference = claim.externalClaimId ?? claim.id;
+  const extractionConfidence = latestExtraction
+    ? Math.round(latestExtraction.confidence * 100)
+    : null;
+  const reviewSignal = getReviewSignal(claim.status, claim.missingInfo.length);
 
   return (
     <main className="app-shell page-stack">
@@ -330,6 +334,68 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
           <section className="surface-card panel section-stack">
             <div className="section-heading">
               <div>
+                <p className="section-kicker">Review posture</p>
+                <h2 className="section-title">Current operating signal</h2>
+                <p className="section-copy">
+                  A compact read on whether this claim can move forward or still needs manual work.
+                </p>
+              </div>
+              <span className={cx("pill", `pill--${reviewSignal.tone}`)}>{reviewSignal.badge}</span>
+            </div>
+
+            <div className="glance-grid">
+              <article className={cx("glance-card", `glance-card--${reviewSignal.tone}`)}>
+                <p className="glance-label">Next action</p>
+                <h3 className="glance-value">{reviewSignal.title}</h3>
+                <p className="glance-copy">{reviewSignal.copy}</p>
+              </article>
+
+              <article className="glance-card glance-card--info">
+                <p className="glance-label">Model confidence</p>
+                <h3 className="glance-value">
+                  {extractionConfidence == null ? "Pending" : `${extractionConfidence}%`}
+                </h3>
+                <p className="glance-copy">
+                  {extractionConfidence == null
+                    ? "No extraction output is available yet."
+                    : "Use this as a directional signal alongside the supporting documents."}
+                </p>
+              </article>
+
+              <article
+                className={cx("glance-card", `glance-card--${canEdit ? "success" : "neutral"}`)}
+              >
+                <p className="glance-label">Access level</p>
+                <h3 className="glance-value">{canEdit ? "Editable" : "Read only"}</h3>
+                <p className="glance-copy">
+                  {canEdit
+                    ? "You can update fields and transition this claim."
+                    : "You can review the record, but edits and transitions are disabled."}
+                </p>
+              </article>
+
+              <article
+                className={cx(
+                  "glance-card",
+                  `glance-card--${claim.missingInfo.length > 0 ? "warning" : "success"}`,
+                )}
+              >
+                <p className="glance-label">Outstanding follow-up</p>
+                <h3 className="glance-value">
+                  {claim.missingInfo.length > 0 ? claim.missingInfo.length : "None"}
+                </h3>
+                <p className="glance-copy">
+                  {claim.missingInfo.length > 0
+                    ? "Missing details are still recorded and may need outreach before completion."
+                    : "No missing information is currently flagged on the claim."}
+                </p>
+              </article>
+            </div>
+          </section>
+
+          <section className="surface-card panel section-stack">
+            <div className="section-heading">
+              <div>
                 <p className="section-kicker">Claim summary</p>
                 <h2 className="section-title">Metadata</h2>
                 <p className="section-copy">
@@ -529,6 +595,59 @@ function MetadataRow({ label, value }: { label: string; value: ReactNode }) {
 
 function getEventTone(eventType: string): "neutral" | "info" {
   return eventType === "STATUS_TRANSITION" ? "info" : "neutral";
+}
+
+function getReviewSignal(
+  status: string,
+  missingInfoCount: number,
+): {
+  badge: string;
+  title: string;
+  copy: string;
+  tone: "neutral" | "info" | "success" | "warning" | "danger";
+} {
+  if (status === "ERROR") {
+    return {
+      badge: "Blocked",
+      title: "Resolve exception",
+      copy: "The claim is in an error state and should be investigated before normal processing can continue.",
+      tone: "danger",
+    };
+  }
+
+  if (status === "READY" && missingInfoCount === 0) {
+    return {
+      badge: "Ready",
+      title: "Advance the claim",
+      copy: "The claim looks prepared to move forward without more customer follow-up.",
+      tone: "success",
+    };
+  }
+
+  if (status === "REVIEW_REQUIRED" || missingInfoCount > 0) {
+    return {
+      badge: "Attention needed",
+      title: "Complete manual review",
+      copy: "Analyst review or additional information is still needed before this claim is considered ready.",
+      tone: "warning",
+    };
+  }
+
+  if (status === "NEW" || status === "PROCESSING") {
+    return {
+      badge: "In intake",
+      title: "Await system progress",
+      copy: "The claim is still moving through intake or extraction before it reaches a review-ready state.",
+      tone: "info",
+    };
+  }
+
+  return {
+    badge: "Open",
+    title: "Monitor status",
+    copy: "The claim is active, but it does not currently fit a stronger operational signal.",
+    tone: "neutral",
+  };
 }
 
 function mapNotice(value: string | null): string | null {
