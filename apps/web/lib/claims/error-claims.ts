@@ -55,51 +55,52 @@ export async function listErrorClaims(input: {
   direction: ErrorClaimsPageDirection;
 }): Promise<{
   claims: ErrorClaimRecord[];
-  count: number;
+  totalCount: number;
   nextCursor: string | null;
   prevCursor: string | null;
 }> {
-  const where = applyTimestampCursor(
-    buildClaimWhereInput(input.organizationId, {
-      ...input.filters,
-      status: "ERROR",
-    }),
-    input.cursor,
-    input.direction,
-    "updatedAt",
-  );
+  const baseWhere = buildClaimWhereInput(input.organizationId, {
+    ...input.filters,
+    status: "ERROR",
+  });
+  const where = applyTimestampCursor(baseWhere, input.cursor, input.direction, "updatedAt");
 
-  const claimsWindow = await prisma.claim.findMany({
-    where,
-    orderBy: input.direction === "prev" ? errorClaimsOrderByAsc : errorClaimsOrderByDesc,
-    take: input.limit + 1,
-    select: {
-      id: true,
-      externalClaimId: true,
-      sourceEmail: true,
-      customerName: true,
-      productName: true,
-      status: true,
-      warrantyStatus: true,
-      createdAt: true,
-      updatedAt: true,
-      events: {
-        where: {
-          eventType: "STATUS_TRANSITION",
-          payload: {
-            path: ["source"],
-            equals: "worker_failure",
+  const [claimsWindow, totalCount] = await Promise.all([
+    prisma.claim.findMany({
+      where,
+      orderBy: input.direction === "prev" ? errorClaimsOrderByAsc : errorClaimsOrderByDesc,
+      take: input.limit + 1,
+      select: {
+        id: true,
+        externalClaimId: true,
+        sourceEmail: true,
+        customerName: true,
+        productName: true,
+        status: true,
+        warrantyStatus: true,
+        createdAt: true,
+        updatedAt: true,
+        events: {
+          where: {
+            eventType: "STATUS_TRANSITION",
+            payload: {
+              path: ["source"],
+              equals: "worker_failure",
+            },
+          },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          take: 1,
+          select: {
+            createdAt: true,
+            payload: true,
           },
         },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 1,
-        select: {
-          createdAt: true,
-          payload: true,
-        },
       },
-    },
-  });
+    }),
+    prisma.claim.count({
+      where: baseWhere,
+    }),
+  ]);
 
   const hasMoreInDirection = claimsWindow.length > input.limit;
   const pageSlice = hasMoreInDirection ? claimsWindow.slice(0, input.limit) : claimsWindow;
@@ -148,7 +149,7 @@ export async function listErrorClaims(input: {
 
   return {
     claims: mapped,
-    count: mapped.length,
+    totalCount,
     nextCursor,
     prevCursor,
   };

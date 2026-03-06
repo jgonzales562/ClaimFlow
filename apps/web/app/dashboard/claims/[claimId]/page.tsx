@@ -1,8 +1,17 @@
-import { prisma } from "@claimflow/db";
 import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { isInlinePreviewableAttachment } from "@/lib/attachments";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { loadClaimDetail } from "@/lib/claims/claim-detail";
+import {
+  describeClaimEvent,
+  formatClaimAttachmentBytes,
+  getClaimEventTone,
+  getClaimReviewSignal,
+  mapClaimDetailError,
+  mapClaimDetailNotice,
+  readClaimExtractionReasoning,
+} from "@/lib/claims/claim-detail-ui";
 import { formatUtcDateTime } from "@/lib/format";
 import { formatDateInput, readSearchParam } from "@/lib/claims/filters";
 import {
@@ -37,73 +46,13 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
 
   const { claimId } = await params;
   const resolvedSearchParams = (await searchParams) ?? {};
-  const notice = mapNotice(readSearchParam(resolvedSearchParams, "notice"));
-  const error = mapError(readSearchParam(resolvedSearchParams, "error"));
+  const notice = mapClaimDetailNotice(readSearchParam(resolvedSearchParams, "notice"));
+  const error = mapClaimDetailError(readSearchParam(resolvedSearchParams, "error"));
   const canEdit = hasMinimumRole(auth.role, "ANALYST");
 
-  const claim = await prisma.claim.findFirst({
-    where: {
-      id: claimId,
-      organizationId: auth.organizationId,
-    },
-    select: {
-      id: true,
-      externalClaimId: true,
-      sourceEmail: true,
-      customerName: true,
-      productName: true,
-      serialNumber: true,
-      purchaseDate: true,
-      issueSummary: true,
-      retailer: true,
-      warrantyStatus: true,
-      missingInfo: true,
-      status: true,
-      createdAt: true,
-      updatedAt: true,
-      attachments: {
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 10,
-        select: {
-          id: true,
-          uploadStatus: true,
-          originalFilename: true,
-          contentType: true,
-          byteSize: true,
-          createdAt: true,
-        },
-      },
-      extractions: {
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 1,
-        select: {
-          provider: true,
-          model: true,
-          confidence: true,
-          extraction: true,
-          createdAt: true,
-        },
-      },
-      events: {
-        where: {
-          organizationId: auth.organizationId,
-        },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 25,
-        select: {
-          id: true,
-          eventType: true,
-          payload: true,
-          createdAt: true,
-          actorUser: {
-            select: {
-              email: true,
-              fullName: true,
-            },
-          },
-        },
-      },
-    },
+  const claim = await loadClaimDetail({
+    organizationId: auth.organizationId,
+    claimId,
   });
 
   if (!claim) {
@@ -115,7 +64,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
   const extractionConfidence = latestExtraction
     ? Math.round(latestExtraction.confidence * 100)
     : null;
-  const reviewSignal = getReviewSignal(claim.status, claim.missingInfo.length);
+  const reviewSignal = getClaimReviewSignal(claim.status, claim.missingInfo.length);
 
   return (
     <main className="app-shell page-stack">
@@ -148,8 +97,8 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
         />
         <StatCard
           label="Attachments"
-          value={claim.attachments.length}
-          note="Stored files available to inspect alongside the claim."
+          value={claim.storedAttachmentCount}
+          note="Stored files currently available to inspect alongside the claim."
         />
         <StatCard
           label="Audit events"
@@ -400,7 +349,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 />
                 <KeyValueRow
                   label="Reasoning"
-                  value={readExtractionReasoning(latestExtraction.extraction) ?? "-"}
+                  value={readClaimExtractionReasoning(latestExtraction.extraction) ?? "-"}
                 />
               </div>
             ) : (
@@ -443,7 +392,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                       </span>
                     </td>
                     <td data-label="Type">{attachment.contentType ?? "-"}</td>
-                    <td data-label="Size">{formatBytes(attachment.byteSize)}</td>
+                    <td data-label="Size">{formatClaimAttachmentBytes(attachment.byteSize)}</td>
                     <td data-label="Uploaded">{formatUtcDateTime(attachment.createdAt)}</td>
                     <td data-label="Actions">
                       {attachment.uploadStatus === "STORED" ? (
@@ -504,14 +453,16 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                   <tr key={event.id}>
                     <td data-label="Time">{formatUtcDateTime(event.createdAt)}</td>
                     <td data-label="Type">
-                      <Pill tone={getEventTone(event.eventType)}>
+                      <Pill tone={getClaimEventTone(event.eventType)}>
                         {formatTokenLabel(event.eventType)}
                       </Pill>
                     </td>
                     <td data-label="Actor">
                       {event.actorUser?.fullName ?? event.actorUser?.email ?? "System"}
                     </td>
-                    <td data-label="Details">{describeEvent(event.eventType, event.payload)}</td>
+                    <td data-label="Details">
+                      {describeClaimEvent(event.eventType, event.payload)}
+                    </td>
                   </tr>
                 ))
               )}
@@ -530,161 +481,4 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       {children}
     </label>
   );
-}
-
-function getEventTone(eventType: string): "neutral" | "info" {
-  return eventType === "STATUS_TRANSITION" ? "info" : "neutral";
-}
-
-function getReviewSignal(
-  status: string,
-  missingInfoCount: number,
-): {
-  badge: string;
-  title: string;
-  copy: string;
-  tone: "neutral" | "info" | "success" | "warning" | "danger";
-} {
-  if (status === "ERROR") {
-    return {
-      badge: "Blocked",
-      title: "Resolve exception",
-      copy: "The claim is in an error state and should be investigated before normal processing can continue.",
-      tone: "danger",
-    };
-  }
-
-  if (status === "READY" && missingInfoCount === 0) {
-    return {
-      badge: "Ready",
-      title: "Advance the claim",
-      copy: "The claim looks prepared to move forward without more customer follow-up.",
-      tone: "success",
-    };
-  }
-
-  if (status === "REVIEW_REQUIRED" || missingInfoCount > 0) {
-    return {
-      badge: "Attention needed",
-      title: "Complete manual review",
-      copy: "Analyst review or additional information is still needed before this claim is considered ready.",
-      tone: "warning",
-    };
-  }
-
-  if (status === "NEW" || status === "PROCESSING") {
-    return {
-      badge: "In intake",
-      title: "Await system progress",
-      copy: "The claim is still moving through intake or extraction before it reaches a review-ready state.",
-      tone: "info",
-    };
-  }
-
-  return {
-    badge: "Open",
-    title: "Monitor status",
-    copy: "The claim is active, but it does not currently fit a stronger operational signal.",
-    tone: "neutral",
-  };
-}
-
-function mapNotice(value: string | null): string | null {
-  switch (value) {
-    case "claim_updated":
-      return "Claim updates saved.";
-    case "status_updated":
-      return "Claim status updated.";
-    case "status_unchanged":
-      return "Status was already set to that value.";
-    case "no_changes":
-      return "No claim field changes were detected.";
-    default:
-      return null;
-  }
-}
-
-function mapError(value: string | null): string | null {
-  switch (value) {
-    case "forbidden":
-      return "You do not have permission to perform that action.";
-    case "invalid_warranty_status":
-      return "Warranty status selection is invalid.";
-    case "invalid_purchase_date":
-      return "Purchase date must be in YYYY-MM-DD format.";
-    case "invalid_status_target":
-      return "Selected status transition target is invalid.";
-    case "invalid_status_transition":
-      return "This status transition is not allowed.";
-    case "claim_not_found":
-      return "Claim not found.";
-    default:
-      return null;
-  }
-}
-
-function readExtractionReasoning(value: unknown): string | null {
-  if (typeof value !== "object" || value === null) {
-    return null;
-  }
-
-  const record = value as Record<string, unknown>;
-  if (typeof record.reasoning !== "string") {
-    return null;
-  }
-
-  return record.reasoning;
-}
-
-function describeEvent(eventType: string, payload: unknown): string {
-  if (typeof payload !== "object" || payload === null) {
-    return eventType === "MANUAL_EDIT" ? "Manual claim edits were saved." : "Status updated.";
-  }
-
-  const record = payload as Record<string, unknown>;
-
-  if (eventType === "STATUS_TRANSITION") {
-    const fromStatus = typeof record.fromStatus === "string" ? record.fromStatus : "unknown";
-    const toStatus = typeof record.toStatus === "string" ? record.toStatus : "unknown";
-    const source = typeof record.source === "string" ? record.source : null;
-    return source
-      ? `${formatTokenLabel(fromStatus)} to ${formatTokenLabel(toStatus)} (${source})`
-      : `${formatTokenLabel(fromStatus)} to ${formatTokenLabel(toStatus)}`;
-  }
-
-  if (eventType === "MANUAL_EDIT") {
-    const changedFields = record.changedFields;
-    if (Array.isArray(changedFields)) {
-      const names = changedFields
-        .map((entry) => {
-          if (typeof entry !== "object" || entry === null) {
-            return null;
-          }
-
-          const field = (entry as Record<string, unknown>).field;
-          return typeof field === "string" ? field : null;
-        })
-        .filter((value): value is string => Boolean(value));
-
-      if (names.length > 0) {
-        return `Updated fields: ${names.join(", ")}`;
-      }
-    }
-
-    return "Manual claim edits were saved.";
-  }
-
-  return formatTokenLabel(eventType);
-}
-
-function formatBytes(value: number): string {
-  if (value < 1024) {
-    return `${value} B`;
-  }
-
-  if (value < 1024 * 1024) {
-    return `${(value / 1024).toFixed(1)} KB`;
-  }
-
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }

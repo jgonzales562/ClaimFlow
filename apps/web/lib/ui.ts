@@ -57,3 +57,7 @@ export function toPercent(count: number, total: number): number {
 export function formatPercent(value: number): string {
   return `${value}%`;
 }
+
+export function formatClaimReference(externalClaimId: string | null, claimId: string): string {
+  return externalClaimId ?? claimId.slice(0, 12);
+}

@@ -16,16 +16,16 @@ import {
   formatDateInput,
   parseClaimFiltersFromRecord,
   readSearchParam,
-  serializeFiltersToQueryParams,
 } from "@/lib/claims/filters";
+import { buildClaimCursorHref } from "@/lib/claims/query-links";
 import { formatUtcDateTime } from "@/lib/format";
 import {
   listErrorClaims,
   parseErrorClaimsCursor,
   parseErrorClaimsPageDirection,
-  type ErrorClaimsPageDirection,
 } from "@/lib/claims/error-claims";
 import {
+  formatClaimReference,
   formatPercent,
   formatTokenLabel,
   getBooleanTone,
@@ -123,7 +123,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
             <Pill tone="warning">{formatTokenLabel(auth.role)}</Pill>
           </>
         }
-        note={`${payload?.count ?? 0} total error claims in the organization workspace.`}
+        note={`${payload?.totalCount ?? 0} total error claims in the organization workspace.`}
         actions={
           <Link href="/dashboard" className="button button--secondary">
             Return to dashboard
@@ -134,7 +134,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
       <section className="summary-strip">
         <StatCard
           label="Error queue"
-          value={payload?.count ?? 0}
+          value={payload?.totalCount ?? 0}
           note="Total claims currently marked with an error status."
         />
         <StatCard
@@ -302,7 +302,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                         </Pill>
                       </div>
                       <span className="subtle-text">
-                        {claim.externalClaimId ?? claim.id.slice(0, 12)}
+                        {formatClaimReference(claim.externalClaimId, claim.id)}
                       </span>
                     </td>
                     <td data-label="Customer / Product">
@@ -355,7 +355,18 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
         <div className="pagination-row">
           {payload.prevCursor ? (
             <Link
-              href={buildErrorClaimsHref(filters, payload.prevCursor, "prev")}
+              href={buildClaimCursorHref(
+                "/dashboard/errors",
+                {
+                  status: null,
+                  search: filters.search,
+                  createdFrom: filters.createdFrom,
+                  createdTo: filters.createdTo,
+                },
+                payload.prevCursor,
+                "prev",
+                { limit: filters.limit },
+              )}
               className="button button--secondary"
             >
               Previous page
@@ -363,7 +374,18 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
           ) : null}
           {payload.nextCursor ? (
             <Link
-              href={buildErrorClaimsHref(filters, payload.nextCursor, "next")}
+              href={buildClaimCursorHref(
+                "/dashboard/errors",
+                {
+                  status: null,
+                  search: filters.search,
+                  createdFrom: filters.createdFrom,
+                  createdTo: filters.createdTo,
+                },
+                payload.nextCursor,
+                "next",
+                { limit: filters.limit },
+              )}
               className="button button--secondary"
             >
               Next page
@@ -373,26 +395,4 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
       ) : null}
     </main>
   );
-}
-
-function buildErrorClaimsHref(
-  filters: {
-    search: string | null;
-    createdFrom: Date | null;
-    createdTo: Date | null;
-    limit: number;
-  },
-  cursor: string,
-  direction: ErrorClaimsPageDirection,
-): string {
-  const params = serializeFiltersToQueryParams({
-    status: null,
-    search: filters.search,
-    createdFrom: filters.createdFrom,
-    createdTo: filters.createdTo,
-  });
-  params.set("limit", String(filters.limit));
-  params.set("cursor", cursor);
-  params.set("direction", direction);
-  return `/dashboard/errors?${params.toString()}`;
 }

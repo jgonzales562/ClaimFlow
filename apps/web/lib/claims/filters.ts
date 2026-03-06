@@ -13,21 +13,11 @@ export type ClaimFilters = {
 export function parseClaimFiltersFromRecord(
   searchParams: Record<string, string | string[] | undefined>,
 ): ClaimFilters {
-  return {
-    status: normalizeClaimStatus(readSearchParam(searchParams, "status")),
-    search: normalizeSearchTerm(readSearchParam(searchParams, "search")),
-    createdFrom: parseIsoDate(readSearchParam(searchParams, "created_from")),
-    createdTo: parseIsoDate(readSearchParam(searchParams, "created_to")),
-  };
+  return parseClaimFilters((key) => readSearchParam(searchParams, key));
 }
 
 export function parseClaimFiltersFromUrlSearchParams(searchParams: URLSearchParams): ClaimFilters {
-  return {
-    status: normalizeClaimStatus(searchParams.get("status")),
-    search: normalizeSearchTerm(searchParams.get("search")),
-    createdFrom: parseIsoDate(searchParams.get("created_from")),
-    createdTo: parseIsoDate(searchParams.get("created_to")),
-  };
+  return parseClaimFilters((key) => searchParams.get(key));
 }
 
 export function buildClaimWhereInput(
@@ -152,6 +142,15 @@ export function readSearchParam(
   }
 
   return null;
+}
+
+function parseClaimFilters(readValue: (key: string) => string | null): ClaimFilters {
+  return {
+    status: normalizeClaimStatus(readValue("status")),
+    search: normalizeSearchTerm(readValue("search")),
+    createdFrom: parseIsoDate(readValue("created_from")),
+    createdTo: parseIsoDate(readValue("created_to")),
+  };
 }
 
 function normalizeSearchTerm(value: string | null): string | null {

@@ -1,5 +1,3 @@
-import { prisma } from "@claimflow/db";
-import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
@@ -13,21 +11,19 @@ import {
 } from "@/components/ui/dashboard";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import {
-  applyTimestampCursor,
-  encodeTimestampCursor,
   parsePageDirection,
   parseTimestampCursor,
-  type PageDirection,
 } from "@/lib/claims/cursor-pagination";
+import { listDashboardClaims } from "@/lib/claims/dashboard-claims";
 import {
-  buildClaimWhereInput,
   CLAIM_STATUSES,
   formatDateInput,
   parseClaimFiltersFromRecord,
   readSearchParam,
-  serializeFiltersToQueryParams,
 } from "@/lib/claims/filters";
+import { buildClaimCursorHref, buildClaimsExportHref } from "@/lib/claims/query-links";
 import {
+  formatClaimReference,
   formatPercent,
   formatTokenLabel,
   getClaimStatusTone,
@@ -42,18 +38,6 @@ type DashboardPageProps = {
 const DASHBOARD_PAGE_SIZE = 100;
 const numberFormatter = new Intl.NumberFormat("en-US");
 
-type DashboardPageDirection = PageDirection;
-
-const dashboardOrderByDesc: Prisma.ClaimOrderByWithRelationInput[] = [
-  { createdAt: "desc" },
-  { id: "desc" },
-];
-
-const dashboardOrderByAsc: Prisma.ClaimOrderByWithRelationInput[] = [
-  { createdAt: "asc" },
-  { id: "asc" },
-];
-
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const auth = await getCachedAuthContext();
   if (!auth) {
@@ -66,46 +50,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const cursor = parseTimestampCursor(readSearchParam(resolvedSearchParams, "cursor"));
   const direction = parsePageDirection(readSearchParam(resolvedSearchParams, "direction"));
 
-  const [claimsWindow, groupedCounts] = await Promise.all([
-    prisma.claim.findMany({
-      where: applyTimestampCursor(
-        buildClaimWhereInput(auth.organizationId, filters),
-        cursor,
-        direction,
-        "createdAt",
-      ),
-      orderBy: direction === "prev" ? dashboardOrderByAsc : dashboardOrderByDesc,
-      take: DASHBOARD_PAGE_SIZE + 1,
-      select: {
-        id: true,
-        externalClaimId: true,
-        customerName: true,
-        productName: true,
-        status: true,
-        warrantyStatus: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    }),
-    prisma.claim.groupBy({
-      by: ["status"],
-      where: {
-        organizationId: auth.organizationId,
-      },
-      _count: {
-        _all: true,
-      },
-    }),
-  ]);
+  const { claims, totalClaims, statusCounts, nextCursor, prevCursor } = await listDashboardClaims({
+    organizationId: auth.organizationId,
+    filters,
+    cursor,
+    direction,
+    pageSize: DASHBOARD_PAGE_SIZE,
+  });
 
-  const statusCounts = groupedCounts.reduce<
-    Partial<Record<(typeof CLAIM_STATUSES)[number], number>>
-  >((result, entry) => {
-    result[entry.status] = entry._count._all;
-    return result;
-  }, {});
-
-  const totalClaims = groupedCounts.reduce((sum, entry) => sum + entry._count._all, 0);
   const newCount = statusCounts.NEW ?? 0;
   const processingCount = statusCounts.PROCESSING ?? 0;
   const reviewRequiredCount = statusCounts.REVIEW_REQUIRED ?? 0;
@@ -142,32 +94,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const reviewLoadShare = toPercent(reviewRequiredCount + errorCount, totalClaims);
   const readyShare = toPercent(readyCount, totalClaims);
 
-  const hasMoreInDirection = claimsWindow.length > DASHBOARD_PAGE_SIZE;
-  const pageSlice = hasMoreInDirection ? claimsWindow.slice(0, DASHBOARD_PAGE_SIZE) : claimsWindow;
-  const claims = direction === "prev" ? [...pageSlice].reverse() : pageSlice;
-  const first = claims[0] ?? null;
-  const last = claims[claims.length - 1] ?? null;
-  const nextCursor = last
-    ? direction === "prev"
-      ? encodeTimestampCursor({ timestamp: last.createdAt, id: last.id })
-      : hasMoreInDirection
-        ? encodeTimestampCursor({ timestamp: last.createdAt, id: last.id })
-        : null
-    : null;
-  const prevCursor = first
-    ? direction === "prev"
-      ? hasMoreInDirection
-        ? encodeTimestampCursor({ timestamp: first.createdAt, id: first.id })
-        : null
-      : cursor
-        ? encodeTimestampCursor({ timestamp: first.createdAt, id: first.id })
-        : null
-    : null;
-
-  const exportQueryParams = serializeFiltersToQueryParams(filters);
-  exportQueryParams.set("limit", "1000");
-  const csvExportHref = `/api/claims/export?${buildExportQuery(exportQueryParams, "csv")}`;
-  const jsonExportHref = `/api/claims/export?${buildExportQuery(exportQueryParams, "json")}`;
+  const csvExportHref = buildClaimsExportHref(filters, "csv", 1000);
+  const jsonExportHref = buildClaimsExportHref(filters, "json", 1000);
 
   return (
     <main className="app-shell app-shell--wide page-stack">
@@ -394,7 +322,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                   <tr key={claim.id}>
                     <td data-label="Claim ID">
                       <Link href={`/dashboard/claims/${claim.id}`} className="table-link">
-                        {claim.externalClaimId ?? claim.id.slice(0, 10)}
+                        {formatClaimReference(claim.externalClaimId, claim.id)}
                       </Link>
                     </td>
                     <td data-label="Customer">{claim.customerName ?? "-"}</td>
@@ -423,7 +351,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         <div className="pagination-row">
           {prevCursor ? (
             <Link
-              href={buildDashboardPageHref(filters, prevCursor, "prev")}
+              href={buildClaimCursorHref("/dashboard", filters, prevCursor, "prev")}
               className="button button--secondary"
             >
               Previous page
@@ -431,7 +359,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           ) : null}
           {nextCursor ? (
             <Link
-              href={buildDashboardPageHref(filters, nextCursor, "next")}
+              href={buildClaimCursorHref("/dashboard", filters, nextCursor, "next")}
               className="button button--secondary"
             >
               Next page
@@ -441,21 +369,4 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       ) : null}
     </main>
   );
-}
-
-function buildExportQuery(baseParams: URLSearchParams, format: "csv" | "json"): string {
-  const copy = new URLSearchParams(baseParams);
-  copy.set("format", format);
-  return copy.toString();
-}
-
-function buildDashboardPageHref(
-  filters: Parameters<typeof serializeFiltersToQueryParams>[0],
-  cursor: string,
-  direction: DashboardPageDirection,
-): string {
-  const params = serializeFiltersToQueryParams(filters);
-  params.set("cursor", cursor);
-  params.set("direction", direction);
-  return `/dashboard?${params.toString()}`;
 }
