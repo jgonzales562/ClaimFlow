@@ -80,14 +80,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
         exportedAt: new Date().toISOString(),
         format,
         count: claims.length,
-        filters: {
-          status: filters.status,
-          search: filters.search,
-          createdFrom: filters.createdFrom?.toISOString().slice(0, 10) ?? null,
-          createdTo: filters.createdTo?.toISOString().slice(0, 10) ?? null,
-        },
-        claims,
-      };
+	        filters: {
+	          status: filters.status,
+	          search: filters.search,
+	          createdFrom: formatDateInput(filters.createdFrom) || null,
+	          createdTo: formatDateInput(filters.createdTo) || null,
+	        },
+	        claims,
+	      };
 
       return new NextResponse(JSON.stringify(payload, null, 2), {
         status: 200,

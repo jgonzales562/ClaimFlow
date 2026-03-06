@@ -678,23 +678,25 @@ async function markClaimAsError(input: {
   failureDisposition: "moved_to_dlq" | "dropped_non_retryable";
 }): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    const claim = await tx.claim.findUnique({
-      where: { id: input.claimId },
+    const claim = await tx.claim.findFirst({
+      where: {
+        id: input.claimId,
+        organizationId: input.organizationId,
+      },
       select: {
         id: true,
-        organizationId: true,
         status: true,
       },
     });
 
-    if (!claim || claim.organizationId !== input.organizationId || claim.status === "ERROR") {
+    if (!claim || claim.status === "ERROR") {
       return;
     }
 
     const transition = await tx.claim.updateMany({
       where: {
         id: claim.id,
-        organizationId: claim.organizationId,
+        organizationId: input.organizationId,
         status: claim.status,
       },
       data: { status: "ERROR" },
@@ -703,7 +705,7 @@ async function markClaimAsError(input: {
     if (transition.count === 1) {
       await tx.claimEvent.create({
         data: {
-          organizationId: claim.organizationId,
+          organizationId: input.organizationId,
           claimId: claim.id,
           eventType: "STATUS_TRANSITION",
           payload: {

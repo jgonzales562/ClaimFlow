@@ -23,6 +23,7 @@ type SignedAttachmentAccessInput = {
 };
 
 let clientSingleton: S3Client | undefined;
+let attachmentStorageConfigSingleton: AttachmentStorageConfig | undefined;
 
 export async function putAttachmentObject(input: PutAttachmentObjectInput): Promise<{
   bucket: string;
@@ -85,6 +86,10 @@ function getS3Client(): S3Client {
 }
 
 function getAttachmentStorageConfig(): AttachmentStorageConfig {
+  if (attachmentStorageConfigSingleton) {
+    return attachmentStorageConfigSingleton;
+  }
+
   const bucket = process.env.ATTACHMENTS_S3_BUCKET?.trim();
   if (!bucket) {
     throw new Error("ATTACHMENTS_S3_BUCKET is required to upload attachments.");
@@ -92,10 +97,12 @@ function getAttachmentStorageConfig(): AttachmentStorageConfig {
 
   const prefix = process.env.ATTACHMENTS_S3_PREFIX?.trim() ?? "claimflow";
 
-  return {
+  attachmentStorageConfigSingleton = {
     bucket,
     prefix: trimSlashes(prefix),
   };
+
+  return attachmentStorageConfigSingleton;
 }
 
 function trimSlashes(value: string): string {

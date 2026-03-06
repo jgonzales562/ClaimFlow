@@ -242,15 +242,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                       {claim.externalClaimId ?? claim.id.slice(0, 10)}
                     </Link>
                   </td>
-                  <td style={tdStyle}>{claim.customerName ?? "-"}</td>
-                  <td style={tdStyle}>{claim.productName ?? "-"}</td>
-                  <td style={tdStyle}>{claim.status}</td>
-                  <td style={tdStyle}>{claim.warrantyStatus}</td>
-                  <td style={tdStyle}>{claim.createdAt.toISOString().slice(0, 10)}</td>
-                  <td style={tdStyle}>{claim.updatedAt.toISOString().slice(0, 10)}</td>
-                </tr>
-              ))
-            )}
+	                  <td style={tdStyle}>{claim.customerName ?? "-"}</td>
+	                  <td style={tdStyle}>{claim.productName ?? "-"}</td>
+	                  <td style={tdStyle}>{claim.status}</td>
+	                  <td style={tdStyle}>{claim.warrantyStatus}</td>
+	                  <td style={tdStyle}>{formatDateInput(claim.createdAt)}</td>
+	                  <td style={tdStyle}>{formatDateInput(claim.updatedAt)}</td>
+	                </tr>
+	              ))
+	            )}
           </tbody>
         </table>
       </section>

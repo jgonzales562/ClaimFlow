@@ -45,13 +45,11 @@ export async function getAuthContext(): Promise<AuthContext | null> {
       role: true,
       user: {
         select: {
-          id: true,
           email: true,
         },
       },
       organization: {
         select: {
-          id: true,
           name: true,
         },
       },
@@ -67,9 +65,9 @@ export async function getAuthContext(): Promise<AuthContext | null> {
   }
 
   return {
-    userId: membership.user.id,
+    userId: payload.userId,
     email: membership.user.email,
-    organizationId: membership.organization.id,
+    organizationId: payload.organizationId,
     organizationName: membership.organization.name,
     role: membership.role,
   };

@@ -14,7 +14,6 @@ import {
   listErrorClaims,
   parseErrorClaimsCursor,
   parseErrorClaimsPageDirection,
-  type ErrorClaimRecord,
   type ErrorClaimsPageDirection,
 } from "@/lib/claims/error-claims";
 
@@ -22,12 +21,7 @@ type ErrorClaimsPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-type ErrorClaimsResponse = {
-  claims: ErrorClaimRecord[];
-  count: number;
-  nextCursor: string | null;
-  prevCursor: string | null;
-};
+type ErrorClaimsResponse = Awaited<ReturnType<typeof listErrorClaims>>;
 
 export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageProps) {
   const auth = await getAuthContext();
