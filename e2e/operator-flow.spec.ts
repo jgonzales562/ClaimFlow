@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
 test.describe("admin claim operator flows", () => {
@@ -63,6 +64,86 @@ test.describe("admin claim operator flows", () => {
     await expect(
       page.getByRole("cell", { name: "Review Required to Ready" }).first(),
     ).toBeVisible();
+  });
+
+  test("admin can export filtered claims from the dashboard", async ({ page }, testInfo) => {
+    test.setTimeout(90_000);
+
+    await page.getByLabel("Search").fill("seed-claim-001");
+    await page.getByLabel("Status").selectOption("REVIEW_REQUIRED");
+    await Promise.all([
+      page.waitForURL(
+        (url) =>
+          url.pathname === "/dashboard" &&
+          url.searchParams.get("search") === "seed-claim-001" &&
+          url.searchParams.get("status") === "REVIEW_REQUIRED",
+      ),
+      page.getByRole("button", { name: "Apply filters" }).click(),
+    ]);
+
+    const [csvDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "Export CSV" }).click(),
+    ]);
+    expect(csvDownload.suggestedFilename()).toMatch(/^claims-export-.*\.csv$/);
+    const csvPath = testInfo.outputPath("claims-export.csv");
+    await csvDownload.saveAs(csvPath);
+    const csvContents = await readFile(csvPath, "utf8");
+    expect(csvContents).toContain("claim_id,external_claim_id,source_email");
+    expect(csvContents).toContain("seed-claim-001");
+    expect(csvContents).not.toContain("seed-claim-002");
+
+    const [jsonDownload] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "Export JSON" }).click(),
+    ]);
+    expect(jsonDownload.suggestedFilename()).toMatch(/^claims-export-.*\.json$/);
+    const jsonPath = testInfo.outputPath("claims-export.json");
+    await jsonDownload.saveAs(jsonPath);
+    const jsonContents = JSON.parse(await readFile(jsonPath, "utf8")) as {
+      count: number;
+      filters: {
+        status: string | null;
+        search: string | null;
+      };
+      claims: Array<{
+        externalClaimId: string | null;
+        status: string;
+      }>;
+    };
+
+    expect(jsonContents.count).toBe(1);
+    expect(jsonContents.filters).toMatchObject({
+      status: "REVIEW_REQUIRED",
+      search: "seed-claim-001",
+    });
+    expect(jsonContents.claims).toHaveLength(1);
+    expect(jsonContents.claims[0]).toMatchObject({
+      externalClaimId: "seed-claim-001",
+      status: "REVIEW_REQUIRED",
+    });
+  });
+
+  test("admin can inspect seeded attachment actions on a claim", async ({ page }) => {
+    test.setTimeout(90_000);
+
+    await openSeededClaim(page, "seed-claim-005");
+
+    const attachmentRow = page.getByRole("row", { name: /installer-report\.pdf/i });
+    await expect(attachmentRow.getByText("installer-report.pdf")).toBeVisible();
+    await expect(attachmentRow.getByText("Stored")).toBeVisible();
+    await expect(attachmentRow.getByText("application/pdf")).toBeVisible();
+    await expect(attachmentRow.getByText("256.0 KB")).toBeVisible();
+
+    const viewLink = attachmentRow.getByRole("link", { name: "View" });
+    const downloadLink = attachmentRow.getByRole("link", { name: "Download" });
+    const viewHref = await viewLink.getAttribute("href");
+    const downloadHref = await downloadLink.getAttribute("href");
+
+    expect(viewHref).toMatch(
+      /^\/api\/claims\/[^/]+\/attachments\/[^/]+\/download\?disposition=inline$/,
+    );
+    expect(downloadHref).toMatch(/^\/api\/claims\/[^/]+\/attachments\/[^/]+\/download$/);
   });
 
   test("admin can triage a seeded error claim from the exception queue", async ({ page }) => {

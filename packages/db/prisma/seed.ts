@@ -98,6 +98,19 @@ async function main(): Promise<void> {
       missingInfo: ["service_report"],
       status: ClaimStatus.ERROR,
     },
+    {
+      externalClaimId: "seed-claim-005",
+      sourceEmail: "claims@dealer.example",
+      customerName: "Taylor Brooks",
+      productName: "Acme SealGuard P12",
+      serialNumber: "ACSP12-1403",
+      purchaseDate: new Date("2025-03-03T00:00:00.000Z"),
+      issueSummary: "Installer report and proof of service are attached for review.",
+      retailer: "Harbor Mechanical Supply",
+      warrantyStatus: WarrantyStatus.LIKELY_IN_WARRANTY,
+      missingInfo: [],
+      status: ClaimStatus.REVIEW_REQUIRED,
+    },
   ] as const;
 
   const seededClaimsByExternalId = new Map<string, { id: string }>();
@@ -171,6 +184,50 @@ async function main(): Promise<void> {
         eventType: "STATUS_TRANSITION",
         payload: workerFailurePayload,
       },
+    });
+  }
+
+  const seededAttachmentClaim = seededClaimsByExternalId.get("seed-claim-005");
+  if (!seededAttachmentClaim) {
+    throw new Error("Expected seeded attachment claim to exist.");
+  }
+
+  const existingSeedAttachment = await prisma.claimAttachment.findFirst({
+    where: {
+      organizationId: organization.id,
+      claimId: seededAttachmentClaim.id,
+      originalFilename: "installer-report.pdf",
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+    },
+  });
+
+  const seedAttachmentData = {
+    organizationId: organization.id,
+    claimId: seededAttachmentClaim.id,
+    storageProvider: "S3" as const,
+    uploadStatus: "STORED" as const,
+    originalFilename: "installer-report.pdf",
+    contentType: "application/pdf",
+    byteSize: 262_144,
+    checksumSha256: "seed-attachment-checksum",
+    s3Bucket: "seed-attachments",
+    s3Key: `claims/${seededAttachmentClaim.id}/installer-report.pdf`,
+    errorMessage: null,
+  };
+
+  if (existingSeedAttachment) {
+    await prisma.claimAttachment.update({
+      where: {
+        id: existingSeedAttachment.id,
+      },
+      data: seedAttachmentData,
+    });
+  } else {
+    await prisma.claimAttachment.create({
+      data: seedAttachmentData,
     });
   }
 
