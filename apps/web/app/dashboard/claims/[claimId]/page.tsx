@@ -1,12 +1,21 @@
 import { prisma } from "@claimflow/db";
-import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { ReactNode } from "react";
 import { isInlinePreviewableAttachment } from "@/lib/attachments";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { formatUtcDateTime } from "@/lib/format";
 import { formatDateInput, readSearchParam } from "@/lib/claims/filters";
-import { cx, formatTokenLabel, getClaimStatusTone, getWarrantyTone } from "@/lib/ui";
+import {
+  GlanceCard,
+  KeyValueRow,
+  NoticeBanner,
+  PageHero,
+  PanelSection,
+  Pill,
+  StatCard,
+  TableSection,
+} from "@/components/ui/dashboard";
+import { formatTokenLabel, getClaimStatusTone, getWarrantyTone } from "@/lib/ui";
 import { transitionClaimStatusAction, updateClaimReviewAction } from "./actions";
 
 type ClaimDetailPageProps = {
@@ -110,73 +119,56 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
 
   return (
     <main className="app-shell page-stack">
-      <section className="hero-card">
-        <div>
-          <p className="hero-breadcrumb">
-            <Link href="/dashboard" className="hero-link">
-              Back to dashboard
-            </Link>
-          </p>
-          <p className="eyebrow">Claim workspace</p>
-          <h1 className="page-title">Claim Review</h1>
-          <p className="page-subtitle">
-            Review extracted details, capture missing information, and keep the claim moving with a
-            complete audit trail.
-          </p>
-        </div>
-
-        <div className="hero-meta">
-          <div className="hero-details">
+      <PageHero
+        eyebrow="Claim workspace"
+        title="Claim Review"
+        subtitle="Review extracted details, capture missing information, and keep the claim moving with a complete audit trail."
+        breadcrumbHref="/dashboard"
+        breadcrumbLabel="Back to dashboard"
+        meta={
+          <>
             <span className="hero-chip">{claimReference}</span>
-            <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
-              {formatTokenLabel(claim.status)}
-            </span>
-            <span className={cx("pill", `pill--${getWarrantyTone(claim.warrantyStatus)}`)}>
+            <Pill tone={getClaimStatusTone(claim.status)}>{formatTokenLabel(claim.status)}</Pill>
+            <Pill tone={getWarrantyTone(claim.warrantyStatus)}>
               {formatTokenLabel(claim.warrantyStatus)}
-            </span>
-          </div>
-          <p className="hero-note">
-            {auth.organizationName} - updated {formatUtcDateTime(claim.updatedAt)}
-          </p>
-        </div>
-      </section>
+            </Pill>
+          </>
+        }
+        note={`${auth.organizationName} - updated ${formatUtcDateTime(claim.updatedAt)}`}
+      />
 
-      {notice ? <p className="notice notice--success">{notice}</p> : null}
-      {error ? <p className="notice notice--danger">{error}</p> : null}
+      {notice ? <NoticeBanner tone="success">{notice}</NoticeBanner> : null}
+      {error ? <NoticeBanner tone="danger">{error}</NoticeBanner> : null}
 
       <section className="summary-strip">
-        <article className="stat-card">
-          <p className="stat-label">Missing info</p>
-          <strong className="stat-value">{claim.missingInfo.length}</strong>
-          <p className="stat-note">Outstanding details still needed to complete the review.</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">Attachments</p>
-          <strong className="stat-value">{claim.attachments.length}</strong>
-          <p className="stat-note">Stored files available to inspect alongside the claim.</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">Audit events</p>
-          <strong className="stat-value">{claim.events.length}</strong>
-          <p className="stat-note">Recent workflow changes and user actions on this claim.</p>
-        </article>
+        <StatCard
+          label="Missing info"
+          value={claim.missingInfo.length}
+          note="Outstanding details still needed to complete the review."
+        />
+        <StatCard
+          label="Attachments"
+          value={claim.attachments.length}
+          note="Stored files available to inspect alongside the claim."
+        />
+        <StatCard
+          label="Audit events"
+          value={claim.events.length}
+          note="Recent workflow changes and user actions on this claim."
+        />
       </section>
 
       <section className="content-grid">
         <div className="side-stack">
-          <section className="surface-card panel section-stack">
-            <div className="section-heading">
-              <div>
-                <p className="section-kicker">Editable fields</p>
-                <h2 className="section-title">Review and edit</h2>
-                <p className="section-copy">
-                  {canEdit
-                    ? "Update the claim record with corrected customer, product, and warranty details."
-                    : "This record is visible to you, but editing is limited to Analyst, Admin, and Owner roles."}
-                </p>
-              </div>
-            </div>
-
+          <PanelSection
+            kicker="Editable fields"
+            title="Review and edit"
+            copy={
+              canEdit
+                ? "Update the claim record with corrected customer, product, and warranty details."
+                : "This record is visible to you, but editing is limited to Analyst, Admin, and Owner roles."
+            }
+          >
             <form action={updateClaimReviewAction} className="section-stack">
               <input type="hidden" name="claimId" value={claim.id} />
 
@@ -277,22 +269,16 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 )}
               </div>
             </form>
-          </section>
+          </PanelSection>
 
-          <section className="surface-card panel section-stack">
-            <div className="section-heading">
-              <div>
-                <p className="section-kicker">Workflow control</p>
-                <h2 className="section-title">Status transition</h2>
-                <p className="section-copy">
-                  Advance or return the claim when it reaches the review-ready states.
-                </p>
-              </div>
-              <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
-                {formatTokenLabel(claim.status)}
-              </span>
-            </div>
-
+          <PanelSection
+            kicker="Workflow control"
+            title="Status transition"
+            copy="Advance or return the claim when it reaches the review-ready states."
+            accessory={
+              <Pill tone={getClaimStatusTone(claim.status)}>{formatTokenLabel(claim.status)}</Pill>
+            }
+          >
             {canEdit ? (
               <div className="cluster">
                 {claim.status === "REVIEW_REQUIRED" ? (
@@ -327,120 +313,92 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 claim status.
               </p>
             )}
-          </section>
+          </PanelSection>
         </div>
 
         <div className="side-stack">
-          <section className="surface-card panel section-stack">
-            <div className="section-heading">
-              <div>
-                <p className="section-kicker">Review posture</p>
-                <h2 className="section-title">Current operating signal</h2>
-                <p className="section-copy">
-                  A compact read on whether this claim can move forward or still needs manual work.
-                </p>
-              </div>
-              <span className={cx("pill", `pill--${reviewSignal.tone}`)}>{reviewSignal.badge}</span>
-            </div>
-
+          <PanelSection
+            kicker="Review posture"
+            title="Current operating signal"
+            copy="A compact read on whether this claim can move forward or still needs manual work."
+            accessory={<Pill tone={reviewSignal.tone}>{reviewSignal.badge}</Pill>}
+          >
             <div className="glance-grid">
-              <article className={cx("glance-card", `glance-card--${reviewSignal.tone}`)}>
-                <p className="glance-label">Next action</p>
-                <h3 className="glance-value">{reviewSignal.title}</h3>
-                <p className="glance-copy">{reviewSignal.copy}</p>
-              </article>
-
-              <article className="glance-card glance-card--info">
-                <p className="glance-label">Model confidence</p>
-                <h3 className="glance-value">
-                  {extractionConfidence == null ? "Pending" : `${extractionConfidence}%`}
-                </h3>
-                <p className="glance-copy">
-                  {extractionConfidence == null
+              <GlanceCard
+                tone={reviewSignal.tone}
+                label="Next action"
+                value={reviewSignal.title}
+                copy={reviewSignal.copy}
+              />
+              <GlanceCard
+                tone="info"
+                label="Model confidence"
+                value={extractionConfidence == null ? "Pending" : `${extractionConfidence}%`}
+                copy={
+                  extractionConfidence == null
                     ? "No extraction output is available yet."
-                    : "Use this as a directional signal alongside the supporting documents."}
-                </p>
-              </article>
-
-              <article
-                className={cx("glance-card", `glance-card--${canEdit ? "success" : "neutral"}`)}
-              >
-                <p className="glance-label">Access level</p>
-                <h3 className="glance-value">{canEdit ? "Editable" : "Read only"}</h3>
-                <p className="glance-copy">
-                  {canEdit
+                    : "Use this as a directional signal alongside the supporting documents."
+                }
+              />
+              <GlanceCard
+                tone={canEdit ? "success" : "neutral"}
+                label="Access level"
+                value={canEdit ? "Editable" : "Read only"}
+                copy={
+                  canEdit
                     ? "You can update fields and transition this claim."
-                    : "You can review the record, but edits and transitions are disabled."}
-                </p>
-              </article>
-
-              <article
-                className={cx(
-                  "glance-card",
-                  `glance-card--${claim.missingInfo.length > 0 ? "warning" : "success"}`,
-                )}
-              >
-                <p className="glance-label">Outstanding follow-up</p>
-                <h3 className="glance-value">
-                  {claim.missingInfo.length > 0 ? claim.missingInfo.length : "None"}
-                </h3>
-                <p className="glance-copy">
-                  {claim.missingInfo.length > 0
+                    : "You can review the record, but edits and transitions are disabled."
+                }
+              />
+              <GlanceCard
+                tone={claim.missingInfo.length > 0 ? "warning" : "success"}
+                label="Outstanding follow-up"
+                value={claim.missingInfo.length > 0 ? claim.missingInfo.length : "None"}
+                copy={
+                  claim.missingInfo.length > 0
                     ? "Missing details are still recorded and may need outreach before completion."
-                    : "No missing information is currently flagged on the claim."}
-                </p>
-              </article>
+                    : "No missing information is currently flagged on the claim."
+                }
+              />
             </div>
-          </section>
+          </PanelSection>
 
-          <section className="surface-card panel section-stack">
-            <div className="section-heading">
-              <div>
-                <p className="section-kicker">Claim summary</p>
-                <h2 className="section-title">Metadata</h2>
-                <p className="section-copy">
-                  Core identifiers and intake metadata for this claim record.
-                </p>
-              </div>
-            </div>
-
+          <PanelSection
+            kicker="Claim summary"
+            title="Metadata"
+            copy="Core identifiers and intake metadata for this claim record."
+          >
             <div className="kv-grid">
-              <MetadataRow label="Claim ID" value={claimReference} />
-              <MetadataRow label="Source Email" value={claim.sourceEmail ?? "-"} />
-              <MetadataRow
+              <KeyValueRow label="Claim ID" value={claimReference} />
+              <KeyValueRow label="Source Email" value={claim.sourceEmail ?? "-"} />
+              <KeyValueRow
                 label="Purchase Date"
                 value={formatDateInput(claim.purchaseDate) || "-"}
               />
-              <MetadataRow label="Retailer" value={claim.retailer ?? "-"} />
-              <MetadataRow label="Created" value={formatUtcDateTime(claim.createdAt)} />
-              <MetadataRow label="Updated" value={formatUtcDateTime(claim.updatedAt)} />
+              <KeyValueRow label="Retailer" value={claim.retailer ?? "-"} />
+              <KeyValueRow label="Created" value={formatUtcDateTime(claim.createdAt)} />
+              <KeyValueRow label="Updated" value={formatUtcDateTime(claim.updatedAt)} />
             </div>
-          </section>
+          </PanelSection>
 
-          <section className="surface-card panel section-stack">
-            <div className="section-heading">
-              <div>
-                <p className="section-kicker">Extraction snapshot</p>
-                <h2 className="section-title">Latest model output</h2>
-                <p className="section-copy">
-                  The most recent extraction payload used to inform warranty and review decisions.
-                </p>
-              </div>
-            </div>
-
+          <PanelSection
+            kicker="Extraction snapshot"
+            title="Latest model output"
+            copy="The most recent extraction payload used to inform warranty and review decisions."
+          >
             {latestExtraction ? (
               <div className="kv-grid">
-                <MetadataRow label="Provider" value={latestExtraction.provider} />
-                <MetadataRow label="Model" value={latestExtraction.model} />
-                <MetadataRow
+                <KeyValueRow label="Provider" value={latestExtraction.provider} />
+                <KeyValueRow label="Model" value={latestExtraction.model} />
+                <KeyValueRow
                   label="Confidence"
                   value={`${Math.round(latestExtraction.confidence * 100)}%`}
                 />
-                <MetadataRow
+                <KeyValueRow
                   label="Extracted At"
                   value={formatUtcDateTime(latestExtraction.createdAt)}
                 />
-                <MetadataRow
+                <KeyValueRow
                   label="Reasoning"
                   value={readExtractionReasoning(latestExtraction.extraction) ?? "-"}
                 />
@@ -448,21 +406,15 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
             ) : (
               <p className="section-copy copy-reset">No extraction has been recorded yet.</p>
             )}
-          </section>
+          </PanelSection>
         </div>
       </section>
 
-      <section className="surface-card table-card">
-        <div className="table-toolbar">
-          <div>
-            <p className="section-kicker">Supporting documents</p>
-            <h2 className="section-title">Attachments</h2>
-            <p className="section-copy">
-              Review stored files, preview inline assets, or download originals for offline review.
-            </p>
-          </div>
-        </div>
-
+      <TableSection
+        kicker="Supporting documents"
+        title="Attachments"
+        copy="Review stored files, preview inline assets, or download originals for offline review."
+      >
         <div className="table-scroll">
           <table className="data-table data-table--responsive">
             <thead>
@@ -523,19 +475,13 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
             </tbody>
           </table>
         </div>
-      </section>
+      </TableSection>
 
-      <section className="surface-card table-card">
-        <div className="table-toolbar">
-          <div>
-            <p className="section-kicker">Recent history</p>
-            <h2 className="section-title">Audit events</h2>
-            <p className="section-copy">
-              Status transitions and manual edits recorded against this claim.
-            </p>
-          </div>
-        </div>
-
+      <TableSection
+        kicker="Recent history"
+        title="Audit events"
+        copy="Status transitions and manual edits recorded against this claim."
+      >
         <div className="table-scroll">
           <table className="data-table data-table--responsive">
             <thead>
@@ -558,9 +504,9 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                   <tr key={event.id}>
                     <td data-label="Time">{formatUtcDateTime(event.createdAt)}</td>
                     <td data-label="Type">
-                      <span className={cx("pill", `pill--${getEventTone(event.eventType)}`)}>
+                      <Pill tone={getEventTone(event.eventType)}>
                         {formatTokenLabel(event.eventType)}
-                      </span>
+                      </Pill>
                     </td>
                     <td data-label="Actor">
                       {event.actorUser?.fullName ?? event.actorUser?.email ?? "System"}
@@ -572,7 +518,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
             </tbody>
           </table>
         </div>
-      </section>
+      </TableSection>
     </main>
   );
 }
@@ -583,15 +529,6 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
       <span>{label}</span>
       {children}
     </label>
-  );
-}
-
-function MetadataRow({ label, value }: { label: string; value: ReactNode }) {
-  return (
-    <div className="kv-row">
-      <p className="kv-label">{label}</p>
-      <div className="kv-value">{value}</div>
-    </div>
   );
 }
 

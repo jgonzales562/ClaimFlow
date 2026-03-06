@@ -2,6 +2,15 @@ import { prisma } from "@claimflow/db";
 import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import {
+  GlanceCard,
+  PageHero,
+  PanelSection,
+  Pill,
+  StatCard,
+  TableSection,
+  WorkflowMeter,
+} from "@/components/ui/dashboard";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import {
   applyTimestampCursor,
@@ -18,7 +27,13 @@ import {
   readSearchParam,
   serializeFiltersToQueryParams,
 } from "@/lib/claims/filters";
-import { cx, formatTokenLabel, getClaimStatusTone, getWarrantyTone } from "@/lib/ui";
+import {
+  formatPercent,
+  formatTokenLabel,
+  getClaimStatusTone,
+  getWarrantyTone,
+  toPercent,
+} from "@/lib/ui";
 
 type DashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -120,7 +135,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       label: "No claims",
       count: 0,
       percent: 0,
-      tone: "neutral",
+      tone: "neutral" as const,
     },
   );
   const intakeShare = toPercent(intakeCount, totalClaims);
@@ -156,173 +171,122 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   return (
     <main className="app-shell app-shell--wide page-stack">
-      <section className="hero-card">
-        <div>
-          <p className="eyebrow">Claims operations</p>
-          <h1 className="page-title">ClaimFlow Dashboard</h1>
-          <p className="page-subtitle">
-            Monitor intake volume, review readiness, and exceptions across {auth.organizationName}
-            {"."}
-          </p>
-        </div>
-
-        <div className="hero-meta">
-          <div className="hero-details">
+      <PageHero
+        eyebrow="Claims operations"
+        title="ClaimFlow Dashboard"
+        subtitle={`Monitor intake volume, review readiness, and exceptions across ${auth.organizationName}.`}
+        meta={
+          <>
             <span className="hero-chip">{auth.organizationName}</span>
-            <span className={cx("pill", "pill--info")}>{formatTokenLabel(auth.role)}</span>
-          </div>
-
-          <p className="hero-note">Signed in as {auth.email}</p>
-
-          <div className="hero-actions">
+            <Pill tone="info">{formatTokenLabel(auth.role)}</Pill>
+          </>
+        }
+        note={`Signed in as ${auth.email}`}
+        actions={
+          <>
             {canAccessErrorTriage ? (
               <Link href="/dashboard/errors" className="button button--secondary">
                 Error Triage
               </Link>
             ) : null}
-
             <form action="/api/auth/logout" method="post">
               <button type="submit" className="button button--primary">
                 Sign out
               </button>
             </form>
-          </div>
-        </div>
-      </section>
+          </>
+        }
+      />
 
       <section className="stats-grid">
-        <article className="stat-card">
-          <p className="stat-label">Total claims</p>
-          <strong className="stat-value">{numberFormatter.format(totalClaims)}</strong>
-          <p className="stat-note">All recorded claims in the organization workspace.</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">Needs review</p>
-          <strong className="stat-value">{numberFormatter.format(reviewRequiredCount)}</strong>
-          <p className="stat-note">Claims waiting on analyst review or missing information.</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">Ready</p>
-          <strong className="stat-value">{numberFormatter.format(readyCount)}</strong>
-          <p className="stat-note">Claims ready to move forward without manual cleanup.</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">Exceptions</p>
-          <strong className="stat-value">{numberFormatter.format(errorCount)}</strong>
-          <p className="stat-note">
-            {canAccessErrorTriage
+        <StatCard
+          label="Total claims"
+          value={numberFormatter.format(totalClaims)}
+          note="All recorded claims in the organization workspace."
+        />
+        <StatCard
+          label="Needs review"
+          value={numberFormatter.format(reviewRequiredCount)}
+          note="Claims waiting on analyst review or missing information."
+        />
+        <StatCard
+          label="Ready"
+          value={numberFormatter.format(readyCount)}
+          note="Claims ready to move forward without manual cleanup."
+        />
+        <StatCard
+          label="Exceptions"
+          value={numberFormatter.format(errorCount)}
+          note={
+            canAccessErrorTriage
               ? "Open the triage queue for failures that need intervention."
-              : "Claims currently in an error state."}
-          </p>
-        </article>
+              : "Claims currently in an error state."
+          }
+        />
       </section>
 
       <section className="insight-grid">
-        <article className="surface-card panel section-stack">
-          <div className="section-heading">
-            <div>
-              <p className="section-kicker">Workflow mix</p>
-              <h2 className="section-title">Queue distribution</h2>
-              <p className="section-copy">
-                Status mix across the entire organization queue, useful for spotting where work is
-                pooling before you drill into individual claims.
-              </p>
-            </div>
-          </div>
-
+        <PanelSection
+          kicker="Workflow mix"
+          title="Queue distribution"
+          copy="Status mix across the entire organization queue, useful for spotting where work is pooling before you drill into individual claims."
+        >
           <div className="workflow-list">
             {workflowBreakdown.map((entry) => (
-              <div className="workflow-row" key={entry.status}>
-                <div className="workflow-heading">
-                  <div className="cluster">
-                    <span className={cx("pill", `pill--${entry.tone}`)}>{entry.label}</span>
-                    <p className="workflow-meta">
-                      {numberFormatter.format(entry.count)} claim{entry.count === 1 ? "" : "s"}
-                    </p>
-                  </div>
-                  <span className="workflow-percent">{formatPercent(entry.percent)}</span>
-                </div>
-                <div className="workflow-track" aria-hidden="true">
-                  <div
-                    className={cx("workflow-fill", `workflow-fill--${entry.tone}`)}
-                    style={{ width: `${entry.count > 0 ? Math.max(entry.percent, 4) : 0}%` }}
-                  />
-                </div>
-              </div>
+              <WorkflowMeter
+                key={entry.status}
+                label={entry.label}
+                meta={`${numberFormatter.format(entry.count)} claim${entry.count === 1 ? "" : "s"}`}
+                percent={entry.percent}
+                tone={entry.tone}
+              />
             ))}
           </div>
-        </article>
+        </PanelSection>
 
-        <article className="surface-card panel section-stack">
-          <div className="section-heading">
-            <div>
-              <p className="section-kicker">Operating picture</p>
-              <h2 className="section-title">At-a-glance posture</h2>
-              <p className="section-copy">
-                A quick read on how much of the queue is still in intake, under manual attention, or
-                ready to move forward.
-              </p>
-            </div>
-          </div>
-
+        <PanelSection
+          kicker="Operating picture"
+          title="At-a-glance posture"
+          copy="A quick read on how much of the queue is still in intake, under manual attention, or ready to move forward."
+        >
           <div className="glance-grid">
-            <article className="glance-card glance-card--info">
-              <p className="glance-label">Intake share</p>
-              <h3 className="glance-value">{formatPercent(intakeShare)}</h3>
-              <p className="glance-copy">
-                {numberFormatter.format(intakeCount)} claims are still in new or processing states.
-              </p>
-            </article>
-
-            <article
-              className={cx(
-                "glance-card",
-                `glance-card--${dominantStage.count > 0 ? dominantStage.tone : "neutral"}`,
-              )}
-            >
-              <p className="glance-label">Dominant stage</p>
-              <h3 className="glance-value">
-                {dominantStage.count > 0 ? dominantStage.label : "No claims"}
-              </h3>
-              <p className="glance-copy">
-                {dominantStage.count > 0
+            <GlanceCard
+              tone="info"
+              label="Intake share"
+              value={formatPercent(intakeShare)}
+              copy={`${numberFormatter.format(intakeCount)} claims are still in new or processing states.`}
+            />
+            <GlanceCard
+              tone={dominantStage.count > 0 ? dominantStage.tone : "neutral"}
+              label="Dominant stage"
+              value={dominantStage.count > 0 ? dominantStage.label : "No claims"}
+              copy={
+                dominantStage.count > 0
                   ? `${numberFormatter.format(dominantStage.count)} claims currently sit in the largest queue segment.`
-                  : "No claims have been recorded yet."}
-              </p>
-            </article>
-
-            <article className="glance-card glance-card--warning">
-              <p className="glance-label">Analyst load</p>
-              <h3 className="glance-value">{formatPercent(reviewLoadShare)}</h3>
-              <p className="glance-copy">
-                {numberFormatter.format(reviewRequiredCount + errorCount)} claims either need review
-                or are blocked by an exception.
-              </p>
-            </article>
-
-            <article className="glance-card glance-card--success">
-              <p className="glance-label">Ready rate</p>
-              <h3 className="glance-value">{formatPercent(readyShare)}</h3>
-              <p className="glance-copy">
-                {numberFormatter.format(readyCount)} claims are ready to move without more cleanup.
-              </p>
-            </article>
+                  : "No claims have been recorded yet."
+              }
+            />
+            <GlanceCard
+              tone="warning"
+              label="Analyst load"
+              value={formatPercent(reviewLoadShare)}
+              copy={`${numberFormatter.format(reviewRequiredCount + errorCount)} claims either need review or are blocked by an exception.`}
+            />
+            <GlanceCard
+              tone="success"
+              label="Ready rate"
+              value={formatPercent(readyShare)}
+              copy={`${numberFormatter.format(readyCount)} claims are ready to move without more cleanup.`}
+            />
           </div>
-        </article>
+        </PanelSection>
       </section>
 
-      <section className="surface-card panel section-stack">
-        <div className="section-heading">
-          <div>
-            <p className="section-kicker">Search and export</p>
-            <h2 className="section-title">Claim queue filters</h2>
-            <p className="section-copy">
-              Refine the queue by free-text search, status, or date range, then export the exact
-              slice you are reviewing.
-            </p>
-          </div>
-        </div>
-
+      <PanelSection
+        kicker="Search and export"
+        title="Claim queue filters"
+        copy="Refine the queue by free-text search, status, or date range, then export the exact slice you are reviewing."
+      >
         <form method="get" className="section-stack">
           <div className="dashboard-filter-primary">
             <label className="field-label">
@@ -389,18 +353,13 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             </div>
           </div>
         </form>
-      </section>
+      </PanelSection>
 
-      <section className="surface-card table-card">
-        <div className="table-toolbar">
-          <div>
-            <p className="section-kicker">Live queue</p>
-            <h2 className="section-title">Recent claims</h2>
-            <p className="section-copy">
-              Showing {numberFormatter.format(claims.length)} claims ordered by newest creation date
-              first.
-            </p>
-          </div>
+      <TableSection
+        kicker="Live queue"
+        title="Recent claims"
+        copy={`Showing ${numberFormatter.format(claims.length)} claims ordered by newest creation date first.`}
+        aside={
           <p className="section-copy">
             {activeFilterCount > 0
               ? `${numberFormatter.format(activeFilterCount)} active filter${
@@ -408,8 +367,8 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 }.`
               : "No filters applied."}
           </p>
-        </div>
-
+        }
+      >
         <div className="table-scroll">
           <table className="data-table data-table--responsive">
             <thead>
@@ -441,16 +400,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                     <td data-label="Customer">{claim.customerName ?? "-"}</td>
                     <td data-label="Product">{claim.productName ?? "-"}</td>
                     <td data-label="Status">
-                      <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
+                      <Pill tone={getClaimStatusTone(claim.status)}>
                         {formatTokenLabel(claim.status)}
-                      </span>
+                      </Pill>
                     </td>
                     <td data-label="Warranty">
-                      <span
-                        className={cx("pill", `pill--${getWarrantyTone(claim.warrantyStatus)}`)}
-                      >
+                      <Pill tone={getWarrantyTone(claim.warrantyStatus)}>
                         {formatTokenLabel(claim.warrantyStatus)}
-                      </span>
+                      </Pill>
                     </td>
                     <td data-label="Created">{formatDateInput(claim.createdAt)}</td>
                     <td data-label="Updated">{formatDateInput(claim.updatedAt)}</td>
@@ -460,7 +417,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
             </tbody>
           </table>
         </div>
-      </section>
+      </TableSection>
 
       {nextCursor || prevCursor ? (
         <div className="pagination-row">
@@ -501,16 +458,4 @@ function buildDashboardPageHref(
   params.set("cursor", cursor);
   params.set("direction", direction);
   return `/dashboard?${params.toString()}`;
-}
-
-function toPercent(count: number, total: number): number {
-  if (total === 0) {
-    return 0;
-  }
-
-  return Math.round((count / total) * 100);
-}
-
-function formatPercent(value: number): string {
-  return `${value}%`;
 }

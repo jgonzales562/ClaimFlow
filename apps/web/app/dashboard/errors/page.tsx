@@ -1,5 +1,15 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import {
+  GlanceCard,
+  NoticeBanner,
+  PageHero,
+  PanelSection,
+  Pill,
+  StatCard,
+  TableSection,
+  WorkflowMeter,
+} from "@/components/ui/dashboard";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import {
   clampLimit,
@@ -15,7 +25,13 @@ import {
   parseErrorClaimsPageDirection,
   type ErrorClaimsPageDirection,
 } from "@/lib/claims/error-claims";
-import { cx, formatTokenLabel, getBooleanTone, getClaimStatusTone } from "@/lib/ui";
+import {
+  formatPercent,
+  formatTokenLabel,
+  getBooleanTone,
+  getClaimStatusTone,
+  toPercent,
+} from "@/lib/ui";
 
 type ErrorClaimsPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -77,173 +93,120 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
       label: "Retryable",
       count: retryableCount,
       percent: toPercent(retryableCount, pageClaims.length),
-      tone: "success",
+      tone: "success" as const,
     },
     {
       label: "Non-retryable",
       count: nonRetryableCount,
       percent: toPercent(nonRetryableCount, pageClaims.length),
-      tone: "danger",
+      tone: "danger" as const,
     },
     {
       label: "Unknown",
       count: unknownRetryabilityCount,
       percent: toPercent(unknownRetryabilityCount, pageClaims.length),
-      tone: "neutral",
+      tone: "neutral" as const,
     },
-  ] as const;
+  ];
 
   return (
     <main className="app-shell app-shell--wide page-stack">
-      <section className="hero-card">
-        <div>
-          <p className="hero-breadcrumb">
-            <Link href="/dashboard" className="hero-link">
-              Back to dashboard
-            </Link>
-          </p>
-          <p className="eyebrow">Exception handling</p>
-          <h1 className="page-title">Error Claim Triage</h1>
-          <p className="page-subtitle">
-            Review failed claims, inspect the failure reason, and move anything retryable back into
-            the queue with context.
-          </p>
-        </div>
-
-        <div className="hero-meta">
-          <div className="hero-details">
+      <PageHero
+        eyebrow="Exception handling"
+        title="Error Claim Triage"
+        subtitle="Review failed claims, inspect the failure reason, and move anything retryable back into the queue with context."
+        breadcrumbHref="/dashboard"
+        breadcrumbLabel="Back to dashboard"
+        meta={
+          <>
             <span className="hero-chip">{auth.organizationName}</span>
-            <span className={cx("pill", "pill--warning")}>{formatTokenLabel(auth.role)}</span>
-          </div>
-          <p className="hero-note">
-            {payload?.count ?? 0} total error claims in the organization workspace.
-          </p>
-          <div className="hero-actions">
-            <Link href="/dashboard" className="button button--secondary">
-              Return to dashboard
-            </Link>
-          </div>
-        </div>
-      </section>
+            <Pill tone="warning">{formatTokenLabel(auth.role)}</Pill>
+          </>
+        }
+        note={`${payload?.count ?? 0} total error claims in the organization workspace.`}
+        actions={
+          <Link href="/dashboard" className="button button--secondary">
+            Return to dashboard
+          </Link>
+        }
+      />
 
       <section className="summary-strip">
-        <article className="stat-card">
-          <p className="stat-label">Error queue</p>
-          <strong className="stat-value">{payload?.count ?? 0}</strong>
-          <p className="stat-note">Total claims currently marked with an error status.</p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">Retryable on page</p>
-          <strong className="stat-value">{retryableCount}</strong>
-          <p className="stat-note">
-            Visible failures that may be recoverable without manual edits.
-          </p>
-        </article>
-        <article className="stat-card">
-          <p className="stat-label">Page limit</p>
-          <strong className="stat-value">{filters.limit}</strong>
-          <p className="stat-note">Current fetch size for triage paging and review workflow.</p>
-        </article>
+        <StatCard
+          label="Error queue"
+          value={payload?.count ?? 0}
+          note="Total claims currently marked with an error status."
+        />
+        <StatCard
+          label="Retryable on page"
+          value={retryableCount}
+          note="Visible failures that may be recoverable without manual edits."
+        />
+        <StatCard
+          label="Page limit"
+          value={filters.limit}
+          note="Current fetch size for triage paging and review workflow."
+        />
       </section>
 
       <section className="insight-grid">
-        <article className="surface-card panel section-stack">
-          <div className="section-heading">
-            <div>
-              <p className="section-kicker">Retryability mix</p>
-              <h2 className="section-title">Current page breakdown</h2>
-              <p className="section-copy">
-                This page groups visible error claims by whether they appear retryable, blocked, or
-                still ambiguous.
-              </p>
-            </div>
-          </div>
-
+        <PanelSection
+          kicker="Retryability mix"
+          title="Current page breakdown"
+          copy="This page groups visible error claims by whether they appear retryable, blocked, or still ambiguous."
+        >
           <div className="workflow-list">
             {retryabilityBreakdown.map((entry) => (
-              <div className="workflow-row" key={entry.label}>
-                <div className="workflow-heading">
-                  <div className="cluster">
-                    <span className={cx("pill", `pill--${entry.tone}`)}>{entry.label}</span>
-                    <p className="workflow-meta">
-                      {entry.count} claim{entry.count === 1 ? "" : "s"}
-                    </p>
-                  </div>
-                  <span className="workflow-percent">{formatPercent(entry.percent)}</span>
-                </div>
-                <div className="workflow-track" aria-hidden="true">
-                  <div
-                    className={cx("workflow-fill", `workflow-fill--${entry.tone}`)}
-                    style={{ width: `${entry.count > 0 ? Math.max(entry.percent, 4) : 0}%` }}
-                  />
-                </div>
-              </div>
+              <WorkflowMeter
+                key={entry.label}
+                label={entry.label}
+                meta={`${entry.count} claim${entry.count === 1 ? "" : "s"}`}
+                percent={entry.percent}
+                tone={entry.tone}
+              />
             ))}
           </div>
-        </article>
+        </PanelSection>
 
-        <article className="surface-card panel section-stack">
-          <div className="section-heading">
-            <div>
-              <p className="section-kicker">Triage notes</p>
-              <h2 className="section-title">Exception pressure</h2>
-              <p className="section-copy">
-                Page-level signals to help prioritize which failures should get first attention.
-              </p>
-            </div>
-          </div>
-
+        <PanelSection
+          kicker="Triage notes"
+          title="Exception pressure"
+          copy="Page-level signals to help prioritize which failures should get first attention."
+        >
           <div className="glance-grid">
-            <article className="glance-card glance-card--success">
-              <p className="glance-label">Retryable share</p>
-              <h3 className="glance-value">
-                {formatPercent(toPercent(retryableCount, pageClaims.length))}
-              </h3>
-              <p className="glance-copy">
-                Start here if you want the fastest path to clearing the visible error queue.
-              </p>
-            </article>
-
-            <article className="glance-card glance-card--danger">
-              <p className="glance-label">Hard failures</p>
-              <h3 className="glance-value">{nonRetryableCount}</h3>
-              <p className="glance-copy">
-                Claims on this page that likely need investigation or manual correction.
-              </p>
-            </article>
-
-            <article className="glance-card glance-card--neutral">
-              <p className="glance-label">Unknown retryability</p>
-              <h3 className="glance-value">{unknownRetryabilityCount}</h3>
-              <p className="glance-copy">
-                Failures without enough context yet to classify as recoverable or blocked.
-              </p>
-            </article>
-
-            <article className="glance-card glance-card--warning">
-              <p className="glance-label">Highest receive count</p>
-              <h3 className="glance-value">{highestReceiveCount}</h3>
-              <p className="glance-copy">
-                The most repeated receive count among the visible failures, useful for spotting
-                noisy retries.
-              </p>
-            </article>
+            <GlanceCard
+              tone="success"
+              label="Retryable share"
+              value={formatPercent(toPercent(retryableCount, pageClaims.length))}
+              copy="Start here if you want the fastest path to clearing the visible error queue."
+            />
+            <GlanceCard
+              tone="danger"
+              label="Hard failures"
+              value={nonRetryableCount}
+              copy="Claims on this page that likely need investigation or manual correction."
+            />
+            <GlanceCard
+              tone="neutral"
+              label="Unknown retryability"
+              value={unknownRetryabilityCount}
+              copy="Failures without enough context yet to classify as recoverable or blocked."
+            />
+            <GlanceCard
+              tone="warning"
+              label="Highest receive count"
+              value={highestReceiveCount}
+              copy="The most repeated receive count among the visible failures, useful for spotting noisy retries."
+            />
           </div>
-        </article>
+        </PanelSection>
       </section>
 
-      <section className="surface-card panel section-stack">
-        <div className="section-heading">
-          <div>
-            <p className="section-kicker">Refine results</p>
-            <h2 className="section-title">Failure search</h2>
-            <p className="section-copy">
-              Filter by claim metadata or creation window to isolate the group of failed claims you
-              need to inspect.
-            </p>
-          </div>
-        </div>
-
+      <PanelSection
+        kicker="Refine results"
+        title="Failure search"
+        copy="Filter by claim metadata or creation window to isolate the group of failed claims you need to inspect."
+      >
         <form method="get" className="section-stack">
           <div className="error-filter-grid">
             <label className="field-label">
@@ -299,21 +262,15 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
             </Link>
           </div>
         </form>
-      </section>
+      </PanelSection>
 
-      {loadError ? <p className="notice notice--danger">{loadError}</p> : null}
+      {loadError ? <NoticeBanner tone="danger">{loadError}</NoticeBanner> : null}
 
-      <section className="surface-card table-card">
-        <div className="table-toolbar">
-          <div>
-            <p className="section-kicker">Failure queue</p>
-            <h2 className="section-title">Claims in error</h2>
-            <p className="section-copy">
-              Each row shows the latest failure metadata alongside a direct link back to the claim.
-            </p>
-          </div>
-        </div>
-
+      <TableSection
+        kicker="Failure queue"
+        title="Claims in error"
+        copy="Each row shows the latest failure metadata alongside a direct link back to the claim."
+      >
         <div className="table-scroll">
           <table className="data-table data-table--responsive">
             <thead>
@@ -340,9 +297,9 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                   <tr key={claim.id}>
                     <td data-label="Claim">
                       <div className="cluster">
-                        <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
+                        <Pill tone={getClaimStatusTone(claim.status)}>
                           {formatTokenLabel(claim.status)}
-                        </span>
+                        </Pill>
                       </div>
                       <span className="subtle-text">
                         {claim.externalClaimId ?? claim.id.slice(0, 12)}
@@ -363,15 +320,13 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                       </span>
                     </td>
                     <td data-label="Retryable">
-                      <span
-                        className={cx("pill", `pill--${getBooleanTone(claim.failure?.retryable)}`)}
-                      >
+                      <Pill tone={getBooleanTone(claim.failure?.retryable)}>
                         {claim.failure?.retryable == null
                           ? "Unknown"
                           : claim.failure.retryable
                             ? "Yes"
                             : "No"}
-                      </span>
+                      </Pill>
                     </td>
                     <td data-label="Receive Count">{claim.failure?.receiveCount ?? "-"}</td>
                     <td data-label="Disposition">
@@ -394,7 +349,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
             </tbody>
           </table>
         </div>
-      </section>
+      </TableSection>
 
       {payload?.nextCursor || payload?.prevCursor ? (
         <div className="pagination-row">
@@ -440,16 +395,4 @@ function buildErrorClaimsHref(
   params.set("cursor", cursor);
   params.set("direction", direction);
   return `/dashboard/errors?${params.toString()}`;
-}
-
-function toPercent(count: number, total: number): number {
-  if (total === 0) {
-    return 0;
-  }
-
-  return Math.round((count / total) * 100);
-}
-
-function formatPercent(value: number): string {
-  return `${value}%`;
 }

@@ -45,3 +45,15 @@ export function getBooleanTone(value: boolean | null | undefined): PillTone {
 
   return value ? "success" : "danger";
 }
+
+export function toPercent(count: number, total: number): number {
+  if (total === 0) {
+    return 0;
+  }
+
+  return Math.round((count / total) * 100);
+}
+
+export function formatPercent(value: number): string {
+  return `${value}%`;
+}
