@@ -7,6 +7,29 @@ const claimStatusSelect = {
   status: true,
 } as const;
 
+export type PersistClaimExtractionOutcomeInput = {
+  claim: {
+    id: string;
+    organizationId: string;
+    customerName: string | null;
+    productName: string | null;
+    serialNumber: string | null;
+    purchaseDate: Date | null;
+    issueSummary: string | null;
+    retailer: string | null;
+  };
+  inboundMessageId: string;
+  selectedExtraction: ClaimExtractionResult;
+  primaryRawOutput: Record<string, unknown>;
+  secondaryRawOutput: Record<string, unknown> | null;
+  extractionSource: "fallback_local_textract" | "fallback_local" | "textract_fallback" | "openai_direct";
+  shouldAttemptTextract: boolean;
+  usedTextractPass: boolean;
+  textractMetadata: Prisma.InputJsonValue;
+  inboundTextChars: number;
+  extractionReadyConfidence: number;
+};
+
 export async function markClaimAsError(
   prismaClient: PrismaClient,
   input: {
@@ -50,28 +73,7 @@ export async function markClaimAsError(
 
 export async function persistClaimExtractionOutcome(
   prismaClient: PrismaClient,
-  input: {
-    claim: {
-      id: string;
-      organizationId: string;
-      customerName: string | null;
-      productName: string | null;
-      serialNumber: string | null;
-      purchaseDate: Date | null;
-      issueSummary: string | null;
-      retailer: string | null;
-    };
-    inboundMessageId: string;
-    selectedExtraction: ClaimExtractionResult;
-    primaryRawOutput: Record<string, unknown>;
-    secondaryRawOutput: Record<string, unknown> | null;
-    extractionSource: "fallback_local_textract" | "fallback_local" | "textract_fallback" | "openai_direct";
-    shouldAttemptTextract: boolean;
-    usedTextractPass: boolean;
-    textractMetadata: Prisma.InputJsonValue;
-    inboundTextChars: number;
-    extractionReadyConfidence: number;
-  },
+  input: PersistClaimExtractionOutcomeInput,
 ): Promise<"READY" | "REVIEW_REQUIRED"> {
   const extracted = input.selectedExtraction.extraction;
   const nextStatus =

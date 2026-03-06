@@ -1,11 +1,12 @@
 import { prisma } from "@claimflow/db";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import { isInlinePreviewableAttachment } from "@/lib/attachments";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { formatUtcDateTime } from "@/lib/format";
 import { formatDateInput, readSearchParam } from "@/lib/claims/filters";
+import { cx, formatTokenLabel, getClaimStatusTone, getWarrantyTone } from "@/lib/ui";
 import { transitionClaimStatusAction, updateClaimReviewAction } from "./actions";
 
 type ClaimDetailPageProps = {
@@ -101,279 +102,408 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
   }
 
   const latestExtraction = claim.extractions[0] ?? null;
+  const claimReference = claim.externalClaimId ?? claim.id;
 
   return (
-    <main style={{ maxWidth: 1080, margin: "42px auto", padding: "0 24px 40px" }}>
-      <header
-        style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}
-      >
+    <main className="app-shell page-stack">
+      <section className="hero-card">
         <div>
-          <p style={{ margin: "0 0 6px" }}>
-            <Link href="/dashboard" style={inlineLinkStyle}>
-              Back to Dashboard
+          <p className="hero-breadcrumb">
+            <Link href="/dashboard" className="hero-link">
+              Back to dashboard
             </Link>
           </p>
-          <h1 style={{ margin: 0 }}>Claim Review</h1>
-          <p style={{ margin: "8px 0 0", color: "#495366" }}>
-            {claim.externalClaimId ?? claim.id} | Status: {claim.status}
+          <p className="eyebrow">Claim workspace</p>
+          <h1 className="page-title">Claim Review</h1>
+          <p className="page-subtitle">
+            Review extracted details, capture missing information, and keep the claim moving with a
+            complete audit trail.
           </p>
         </div>
-      </header>
 
-      {notice ? <p style={noticeStyle}>{notice}</p> : null}
-      {error ? <p style={errorStyle}>{error}</p> : null}
-
-      <section style={cardStyle}>
-        <h2 style={sectionHeadingStyle}>Claim Metadata</h2>
-        <div style={metadataGridStyle}>
-          <MetadataRow label="Claim ID" value={claim.externalClaimId ?? claim.id} />
-          <MetadataRow label="Source Email" value={claim.sourceEmail ?? "-"} />
-          <MetadataRow label="Created" value={formatUtcDateTime(claim.createdAt)} />
-          <MetadataRow label="Updated" value={formatUtcDateTime(claim.updatedAt)} />
+        <div className="hero-meta">
+          <div className="hero-details">
+            <span className="hero-chip">{claimReference}</span>
+            <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
+              {formatTokenLabel(claim.status)}
+            </span>
+            <span className={cx("pill", `pill--${getWarrantyTone(claim.warrantyStatus)}`)}>
+              {formatTokenLabel(claim.warrantyStatus)}
+            </span>
+          </div>
+          <p className="hero-note">
+            {auth.organizationName} - updated {formatUtcDateTime(claim.updatedAt)}
+          </p>
         </div>
       </section>
 
-      <section style={cardStyle}>
-        <h2 style={sectionHeadingStyle}>Review and Edit</h2>
-        <form action={updateClaimReviewAction} style={{ display: "grid", gap: 10 }}>
-          <input type="hidden" name="claimId" value={claim.id} />
-          <div style={fieldGridStyle}>
-            <Field label="Customer Name">
-              <input
-                type="text"
-                name="customerName"
-                defaultValue={claim.customerName ?? ""}
-                style={inputStyle}
-                disabled={!canEdit}
-              />
-            </Field>
-            <Field label="Product Name">
-              <input
-                type="text"
-                name="productName"
-                defaultValue={claim.productName ?? ""}
-                style={inputStyle}
-                disabled={!canEdit}
-              />
-            </Field>
-            <Field label="Serial Number">
-              <input
-                type="text"
-                name="serialNumber"
-                defaultValue={claim.serialNumber ?? ""}
-                style={inputStyle}
-                disabled={!canEdit}
-              />
-            </Field>
-            <Field label="Purchase Date">
-                <input
-                  type="date"
-                  name="purchaseDate"
-                  defaultValue={formatDateInput(claim.purchaseDate)}
-                  style={inputStyle}
+      {notice ? <p className="notice notice--success">{notice}</p> : null}
+      {error ? <p className="notice notice--danger">{error}</p> : null}
+
+      <section className="summary-strip">
+        <article className="stat-card">
+          <p className="stat-label">Missing info</p>
+          <strong className="stat-value">{claim.missingInfo.length}</strong>
+          <p className="stat-note">Outstanding details still needed to complete the review.</p>
+        </article>
+        <article className="stat-card">
+          <p className="stat-label">Attachments</p>
+          <strong className="stat-value">{claim.attachments.length}</strong>
+          <p className="stat-note">Stored files available to inspect alongside the claim.</p>
+        </article>
+        <article className="stat-card">
+          <p className="stat-label">Audit events</p>
+          <strong className="stat-value">{claim.events.length}</strong>
+          <p className="stat-note">Recent workflow changes and user actions on this claim.</p>
+        </article>
+      </section>
+
+      <section className="content-grid">
+        <div className="side-stack">
+          <section className="surface-card panel section-stack">
+            <div className="section-heading">
+              <div>
+                <p className="section-kicker">Editable fields</p>
+                <h2 className="section-title">Review and edit</h2>
+                <p className="section-copy">
+                  {canEdit
+                    ? "Update the claim record with corrected customer, product, and warranty details."
+                    : "This record is visible to you, but editing is limited to Analyst, Admin, and Owner roles."}
+                </p>
+              </div>
+            </div>
+
+            <form action={updateClaimReviewAction} className="section-stack">
+              <input type="hidden" name="claimId" value={claim.id} />
+
+              <div className="claim-field-grid">
+                <Field label="Customer Name">
+                  <input
+                    className="control"
+                    type="text"
+                    name="customerName"
+                    defaultValue={claim.customerName ?? ""}
+                    disabled={!canEdit}
+                  />
+                </Field>
+
+                <Field label="Product Name">
+                  <input
+                    className="control"
+                    type="text"
+                    name="productName"
+                    defaultValue={claim.productName ?? ""}
+                    disabled={!canEdit}
+                  />
+                </Field>
+
+                <Field label="Serial Number">
+                  <input
+                    className="control"
+                    type="text"
+                    name="serialNumber"
+                    defaultValue={claim.serialNumber ?? ""}
+                    disabled={!canEdit}
+                  />
+                </Field>
+
+                <Field label="Purchase Date">
+                  <input
+                    className="control"
+                    type="date"
+                    name="purchaseDate"
+                    defaultValue={formatDateInput(claim.purchaseDate)}
+                    disabled={!canEdit}
+                  />
+                </Field>
+
+                <Field label="Retailer">
+                  <input
+                    className="control"
+                    type="text"
+                    name="retailer"
+                    defaultValue={claim.retailer ?? ""}
+                    disabled={!canEdit}
+                  />
+                </Field>
+
+                <Field label="Warranty Status">
+                  <select
+                    className="control"
+                    name="warrantyStatus"
+                    defaultValue={claim.warrantyStatus}
+                    disabled={!canEdit}
+                  >
+                    {WARRANTY_STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {formatTokenLabel(status)}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
+              <Field label="Issue Summary">
+                <textarea
+                  className="control"
+                  name="issueSummary"
+                  defaultValue={claim.issueSummary ?? ""}
+                  rows={5}
                   disabled={!canEdit}
                 />
-            </Field>
-            <Field label="Retailer">
-              <input
-                type="text"
-                name="retailer"
-                defaultValue={claim.retailer ?? ""}
-                style={inputStyle}
-                disabled={!canEdit}
-              />
-            </Field>
-            <Field label="Warranty Status">
-              <select
-                name="warrantyStatus"
-                defaultValue={claim.warrantyStatus}
-                style={inputStyle}
-                disabled={!canEdit}
-              >
-                {WARRANTY_STATUSES.map((status) => (
-                  <option key={status} value={status}>
-                    {status}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
+              </Field>
 
-          <Field label="Issue Summary">
-            <textarea
-              name="issueSummary"
-              defaultValue={claim.issueSummary ?? ""}
-              rows={5}
-              style={textareaStyle}
-              disabled={!canEdit}
-            />
-          </Field>
+              <Field label="Missing Info (one per line)">
+                <textarea
+                  className="control"
+                  name="missingInfo"
+                  defaultValue={claim.missingInfo.join("\n")}
+                  rows={4}
+                  disabled={!canEdit}
+                />
+              </Field>
 
-          <Field label="Missing Info (one per line)">
-            <textarea
-              name="missingInfo"
-              defaultValue={claim.missingInfo.join("\n")}
-              rows={4}
-              style={textareaStyle}
-              disabled={!canEdit}
-            />
-          </Field>
+              <div className="cluster">
+                {canEdit ? (
+                  <button type="submit" className="button button--primary">
+                    Save claim updates
+                  </button>
+                ) : (
+                  <p className="section-copy copy-reset">Your role is read-only for claim edits.</p>
+                )}
+              </div>
+            </form>
+          </section>
 
-          <div>
+          <section className="surface-card panel section-stack">
+            <div className="section-heading">
+              <div>
+                <p className="section-kicker">Workflow control</p>
+                <h2 className="section-title">Status transition</h2>
+                <p className="section-copy">
+                  Advance or return the claim when it reaches the review-ready states.
+                </p>
+              </div>
+              <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
+                {formatTokenLabel(claim.status)}
+              </span>
+            </div>
+
             {canEdit ? (
-              <button type="submit" style={primaryButtonStyle}>
-                Save Claim Updates
-              </button>
+              <div className="cluster">
+                {claim.status === "REVIEW_REQUIRED" ? (
+                  <form action={transitionClaimStatusAction}>
+                    <input type="hidden" name="claimId" value={claim.id} />
+                    <input type="hidden" name="targetStatus" value="READY" />
+                    <button type="submit" className="button button--primary">
+                      Mark as READY
+                    </button>
+                  </form>
+                ) : null}
+
+                {claim.status === "READY" ? (
+                  <form action={transitionClaimStatusAction}>
+                    <input type="hidden" name="claimId" value={claim.id} />
+                    <input type="hidden" name="targetStatus" value="REVIEW_REQUIRED" />
+                    <button type="submit" className="button button--secondary">
+                      Return to REVIEW_REQUIRED
+                    </button>
+                  </form>
+                ) : null}
+
+                {claim.status !== "REVIEW_REQUIRED" && claim.status !== "READY" ? (
+                  <p className="section-copy copy-reset">
+                    Transition actions appear once the claim reaches review-ready states.
+                  </p>
+                ) : null}
+              </div>
             ) : (
-              <p style={{ margin: 0, color: "#667084" }}>
-                Your role is read-only. Analyst/Admin/Owner is required to edit.
+              <p className="section-copy copy-reset">
+                Your role is read-only. Analyst, Admin, or Owner access is required to transition
+                claim status.
               </p>
             )}
-          </div>
-        </form>
+          </section>
+        </div>
+
+        <div className="side-stack">
+          <section className="surface-card panel section-stack">
+            <div className="section-heading">
+              <div>
+                <p className="section-kicker">Claim summary</p>
+                <h2 className="section-title">Metadata</h2>
+                <p className="section-copy">
+                  Core identifiers and intake metadata for this claim record.
+                </p>
+              </div>
+            </div>
+
+            <div className="kv-grid">
+              <MetadataRow label="Claim ID" value={claimReference} />
+              <MetadataRow label="Source Email" value={claim.sourceEmail ?? "-"} />
+              <MetadataRow
+                label="Purchase Date"
+                value={formatDateInput(claim.purchaseDate) || "-"}
+              />
+              <MetadataRow label="Retailer" value={claim.retailer ?? "-"} />
+              <MetadataRow label="Created" value={formatUtcDateTime(claim.createdAt)} />
+              <MetadataRow label="Updated" value={formatUtcDateTime(claim.updatedAt)} />
+            </div>
+          </section>
+
+          <section className="surface-card panel section-stack">
+            <div className="section-heading">
+              <div>
+                <p className="section-kicker">Extraction snapshot</p>
+                <h2 className="section-title">Latest model output</h2>
+                <p className="section-copy">
+                  The most recent extraction payload used to inform warranty and review decisions.
+                </p>
+              </div>
+            </div>
+
+            {latestExtraction ? (
+              <div className="kv-grid">
+                <MetadataRow label="Provider" value={latestExtraction.provider} />
+                <MetadataRow label="Model" value={latestExtraction.model} />
+                <MetadataRow
+                  label="Confidence"
+                  value={`${Math.round(latestExtraction.confidence * 100)}%`}
+                />
+                <MetadataRow
+                  label="Extracted At"
+                  value={formatUtcDateTime(latestExtraction.createdAt)}
+                />
+                <MetadataRow
+                  label="Reasoning"
+                  value={readExtractionReasoning(latestExtraction.extraction) ?? "-"}
+                />
+              </div>
+            ) : (
+              <p className="section-copy copy-reset">No extraction has been recorded yet.</p>
+            )}
+          </section>
+        </div>
       </section>
 
-      <section style={cardStyle}>
-        <h2 style={sectionHeadingStyle}>Status Transition</h2>
-        <p style={{ marginTop: 0, color: "#475467" }}>Current status: {claim.status}</p>
-
-        {canEdit ? (
-          <div style={{ display: "flex", gap: 8 }}>
-            {claim.status === "REVIEW_REQUIRED" ? (
-              <form action={transitionClaimStatusAction}>
-                <input type="hidden" name="claimId" value={claim.id} />
-                <input type="hidden" name="targetStatus" value="READY" />
-                <button type="submit" style={primaryButtonStyle}>
-                  Mark as READY
-                </button>
-              </form>
-            ) : null}
-
-            {claim.status === "READY" ? (
-              <form action={transitionClaimStatusAction}>
-                <input type="hidden" name="claimId" value={claim.id} />
-                <input type="hidden" name="targetStatus" value="REVIEW_REQUIRED" />
-                <button type="submit" style={secondaryButtonStyle}>
-                  Return to REVIEW_REQUIRED
-                </button>
-              </form>
-            ) : null}
-
-            {claim.status !== "REVIEW_REQUIRED" && claim.status !== "READY" ? (
-              <p style={{ margin: 0, color: "#667084" }}>
-                Transition buttons appear when the claim reaches review-ready states.
-              </p>
-            ) : null}
+      <section className="surface-card table-card">
+        <div className="table-toolbar">
+          <div>
+            <p className="section-kicker">Supporting documents</p>
+            <h2 className="section-title">Attachments</h2>
+            <p className="section-copy">
+              Review stored files, preview inline assets, or download originals for offline review.
+            </p>
           </div>
-        ) : (
-          <p style={{ margin: 0, color: "#667084" }}>
-            Your role is read-only. Analyst/Admin/Owner is required to transition status.
-          </p>
-        )}
-      </section>
+        </div>
 
-      <section style={cardStyle}>
-        <h2 style={sectionHeadingStyle}>Latest Extraction Snapshot</h2>
-        {latestExtraction ? (
-          <div style={{ display: "grid", gap: 6 }}>
-            <MetadataRow label="Provider" value={latestExtraction.provider} />
-            <MetadataRow label="Model" value={latestExtraction.model} />
-            <MetadataRow label="Confidence" value={latestExtraction.confidence.toFixed(2)} />
-            <MetadataRow
-              label="Extracted At"
-              value={formatUtcDateTime(latestExtraction.createdAt)}
-            />
-            <MetadataRow
-              label="Reasoning"
-              value={readExtractionReasoning(latestExtraction.extraction) ?? "-"}
-            />
-          </div>
-        ) : (
-          <p style={{ margin: 0, color: "#667084" }}>No extraction has been recorded yet.</p>
-        )}
-      </section>
-
-      <section style={cardStyle}>
-        <h2 style={sectionHeadingStyle}>Attachments ({claim.attachments.length})</h2>
-        {claim.attachments.length === 0 ? (
-          <p style={{ margin: 0, color: "#667084" }}>No attachments stored for this claim.</p>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-            <thead style={{ textAlign: "left", background: "#f9fafb" }}>
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th style={thStyle}>Filename</th>
-                <th style={thStyle}>Type</th>
-                <th style={thStyle}>Size</th>
-                <th style={thStyle}>Uploaded</th>
-                <th style={thStyle}>Actions</th>
+                <th>Filename</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Uploaded</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {claim.attachments.map((attachment) => (
-                <tr key={attachment.id} style={{ borderTop: "1px solid #eef2f6" }}>
-                  <td style={tdStyle}>{attachment.originalFilename}</td>
-                  <td style={tdStyle}>{attachment.contentType ?? "-"}</td>
-                  <td style={tdStyle}>{formatBytes(attachment.byteSize)}</td>
-                  <td style={tdStyle}>{formatUtcDateTime(attachment.createdAt)}</td>
-                  <td style={tdStyle}>
-                    {attachment.uploadStatus === "STORED" ? (
-                      <div style={attachmentActionStyle}>
-                        {isInlinePreviewableAttachment(attachment.contentType) ? (
+              {claim.attachments.length === 0 ? (
+                <tr>
+                  <td colSpan={5} className="empty-state">
+                    No attachments stored for this claim.
+                  </td>
+                </tr>
+              ) : (
+                claim.attachments.map((attachment) => (
+                  <tr key={attachment.id}>
+                    <td>
+                      <div>{attachment.originalFilename}</div>
+                      <span className="subtle-text">
+                        {formatTokenLabel(attachment.uploadStatus)}
+                      </span>
+                    </td>
+                    <td>{attachment.contentType ?? "-"}</td>
+                    <td>{formatBytes(attachment.byteSize)}</td>
+                    <td>{formatUtcDateTime(attachment.createdAt)}</td>
+                    <td>
+                      {attachment.uploadStatus === "STORED" ? (
+                        <div className="cluster">
+                          {isInlinePreviewableAttachment(attachment.contentType) ? (
+                            <a
+                              href={`/api/claims/${claim.id}/attachments/${attachment.id}/download?disposition=inline`}
+                              className="table-link"
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              View
+                            </a>
+                          ) : null}
                           <a
-                            href={`/api/claims/${claim.id}/attachments/${attachment.id}/download?disposition=inline`}
-                            style={inlineLinkStyle}
-                            target="_blank"
-                            rel="noreferrer"
+                            href={`/api/claims/${claim.id}/attachments/${attachment.id}/download`}
+                            className="table-link"
                           >
-                            View
+                            Download
                           </a>
-                        ) : null}
-                        <a
-                          href={`/api/claims/${claim.id}/attachments/${attachment.id}/download`}
-                          style={inlineLinkStyle}
-                        >
-                          Download
-                        </a>
-                      </div>
-                    ) : (
-                      "Unavailable"
-                    )}
-                  </td>
-                </tr>
-              ))}
+                        </div>
+                      ) : (
+                        "Unavailable"
+                      )}
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
-        )}
+        </div>
       </section>
 
-      <section style={cardStyle}>
-        <h2 style={sectionHeadingStyle}>Audit Events</h2>
-        {claim.events.length === 0 ? (
-          <p style={{ margin: 0, color: "#667084" }}>No audit events yet.</p>
-        ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
-            <thead style={{ textAlign: "left", background: "#f9fafb" }}>
+      <section className="surface-card table-card">
+        <div className="table-toolbar">
+          <div>
+            <p className="section-kicker">Recent history</p>
+            <h2 className="section-title">Audit events</h2>
+            <p className="section-copy">
+              Status transitions and manual edits recorded against this claim.
+            </p>
+          </div>
+        </div>
+
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
               <tr>
-                <th style={thStyle}>Time</th>
-                <th style={thStyle}>Type</th>
-                <th style={thStyle}>Actor</th>
-                <th style={thStyle}>Details</th>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Actor</th>
+                <th>Details</th>
               </tr>
             </thead>
             <tbody>
-              {claim.events.map((event) => (
-                <tr key={event.id} style={{ borderTop: "1px solid #eef2f6" }}>
-                  <td style={tdStyle}>{formatUtcDateTime(event.createdAt)}</td>
-                  <td style={tdStyle}>{event.eventType}</td>
-                  <td style={tdStyle}>
-                    {event.actorUser?.fullName ?? event.actorUser?.email ?? "System"}
+              {claim.events.length === 0 ? (
+                <tr>
+                  <td colSpan={4} className="empty-state">
+                    No audit events yet.
                   </td>
-                  <td style={tdStyle}>{describeEvent(event.eventType, event.payload)}</td>
                 </tr>
-              ))}
+              ) : (
+                claim.events.map((event) => (
+                  <tr key={event.id}>
+                    <td>{formatUtcDateTime(event.createdAt)}</td>
+                    <td>
+                      <span className={cx("pill", `pill--${getEventTone(event.eventType)}`)}>
+                        {formatTokenLabel(event.eventType)}
+                      </span>
+                    </td>
+                    <td>{event.actorUser?.fullName ?? event.actorUser?.email ?? "System"}</td>
+                    <td>{describeEvent(event.eventType, event.payload)}</td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
-        )}
+        </div>
       </section>
     </main>
   );
@@ -381,19 +511,24 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <label style={fieldLabelStyle}>
+    <label className="field-label">
       <span>{label}</span>
       {children}
     </label>
   );
 }
 
-function MetadataRow({ label, value }: { label: string; value: string }) {
+function MetadataRow({ label, value }: { label: string; value: ReactNode }) {
   return (
-    <p style={{ margin: 0 }}>
-      <strong>{label}:</strong> {value}
-    </p>
+    <div className="kv-row">
+      <p className="kv-label">{label}</p>
+      <div className="kv-value">{value}</div>
+    </div>
   );
+}
+
+function getEventTone(eventType: string): "neutral" | "info" {
+  return eventType === "STATUS_TRANSITION" ? "info" : "neutral";
 }
 
 function mapNotice(value: string | null): string | null {
@@ -454,7 +589,9 @@ function describeEvent(eventType: string, payload: unknown): string {
     const fromStatus = typeof record.fromStatus === "string" ? record.fromStatus : "unknown";
     const toStatus = typeof record.toStatus === "string" ? record.toStatus : "unknown";
     const source = typeof record.source === "string" ? record.source : null;
-    return source ? `${fromStatus} -> ${toStatus} (${source})` : `${fromStatus} -> ${toStatus}`;
+    return source
+      ? `${formatTokenLabel(fromStatus)} to ${formatTokenLabel(toStatus)} (${source})`
+      : `${formatTokenLabel(fromStatus)} to ${formatTokenLabel(toStatus)}`;
   }
 
   if (eventType === "MANUAL_EDIT") {
@@ -479,7 +616,7 @@ function describeEvent(eventType: string, payload: unknown): string {
     return "Manual claim edits were saved.";
   }
 
-  return eventType;
+  return formatTokenLabel(eventType);
 }
 
 function formatBytes(value: number): string {
@@ -493,107 +630,3 @@ function formatBytes(value: number): string {
 
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
-
-const cardStyle: CSSProperties = {
-  border: "1px solid #e4e7ec",
-  borderRadius: 10,
-  background: "#fff",
-  padding: 16,
-  marginTop: 14,
-};
-
-const sectionHeadingStyle: CSSProperties = {
-  marginTop: 0,
-  marginBottom: 12,
-  fontSize: 18,
-};
-
-const metadataGridStyle: CSSProperties = {
-  display: "grid",
-  gap: 6,
-};
-
-const fieldGridStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-  gap: 10,
-};
-
-const fieldLabelStyle: CSSProperties = {
-  display: "grid",
-  gap: 6,
-  color: "#344054",
-  fontSize: 13,
-};
-
-const inputStyle: CSSProperties = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 8,
-  padding: "8px 10px",
-  fontSize: 14,
-};
-
-const textareaStyle: CSSProperties = {
-  ...inputStyle,
-  resize: "vertical",
-};
-
-const primaryButtonStyle: CSSProperties = {
-  border: "1px solid #0f172a",
-  borderRadius: 8,
-  background: "#0f172a",
-  color: "#fff",
-  padding: "8px 12px",
-  cursor: "pointer",
-  fontWeight: 600,
-};
-
-const secondaryButtonStyle: CSSProperties = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 8,
-  background: "#fff",
-  color: "#1d2939",
-  padding: "8px 12px",
-  cursor: "pointer",
-};
-
-const inlineLinkStyle: CSSProperties = {
-  color: "#155eef",
-  textDecoration: "none",
-};
-
-const attachmentActionStyle: CSSProperties = {
-  display: "flex",
-  gap: 10,
-  alignItems: "center",
-};
-
-const thStyle: CSSProperties = {
-  padding: "10px 12px",
-  borderBottom: "1px solid #eaecf0",
-  fontWeight: 600,
-  color: "#344054",
-};
-
-const tdStyle: CSSProperties = {
-  padding: "10px 12px",
-  color: "#1d2939",
-};
-
-const noticeStyle: CSSProperties = {
-  marginTop: 12,
-  background: "#ecfdf3",
-  color: "#027a48",
-  border: "1px solid #abefc6",
-  borderRadius: 8,
-  padding: "10px 12px",
-};
-
-const errorStyle: CSSProperties = {
-  marginTop: 12,
-  background: "#fef3f2",
-  color: "#b42318",
-  border: "1px solid #fecdca",
-  borderRadius: 8,
-  padding: "10px 12px",
-};

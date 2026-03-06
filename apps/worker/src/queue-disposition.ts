@@ -23,11 +23,11 @@ type QueueDispositionConfig = {
   maxReceiveCount: number;
 };
 
-type QueueSqsClient = {
+export type QueueSqsClient = {
   send(command: unknown): Promise<unknown>;
 };
 
-type MarkClaimAsErrorInput = {
+export type MarkClaimAsErrorInput = {
   claimId: string;
   organizationId: string;
   reason: string;

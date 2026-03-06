@@ -1,4 +1,3 @@
-import type { CSSProperties } from "react";
 import Link from "next/link";
 
 type LoginPageProps = {
@@ -11,77 +10,102 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const errorValue = Array.isArray(error) ? error[0] : error;
 
   return (
-    <main style={{ maxWidth: 440, margin: "72px auto", padding: "0 24px" }}>
-      <h1 style={{ marginBottom: 8 }}>Sign in to ClaimFlow</h1>
-      <p style={{ marginTop: 0, color: "#495366" }}>
-        Use your organization account to access claims.
-      </p>
+    <main className="login-shell">
+      <section className="login-layout">
+        <div className="login-hero">
+          <div>
+            <p className="eyebrow">Claim operations platform</p>
+            <h1 className="login-lead">Warranty claims without the inbox chaos.</h1>
+            <p className="login-copy">
+              ClaimFlow gives operations teams a cleaner way to intake, review, and resolve claims
+              while keeping every attachment, edit, and status change traceable.
+            </p>
+          </div>
 
-      {errorValue ? (
-        <p
-          style={{
-            background: "#fff1f2",
-            color: "#991b1b",
-            border: "1px solid #fecdd3",
-            borderRadius: 8,
-            padding: 12,
-            marginBottom: 16,
-          }}
-        >
-          {errorValue === "no_membership"
-            ? "This user has no organization membership."
-            : errorValue === "invalid_role"
-              ? "This user has an invalid organization role."
-            : "Invalid email or password."}
-        </p>
-      ) : null}
+          <div className="feature-list">
+            <article className="feature-item">
+              <h2 className="feature-title">Centralized intake</h2>
+              <p className="feature-copy">
+                Bring claim emails, documents, and extracted fields into a single working queue.
+              </p>
+            </article>
+            <article className="feature-item">
+              <h2 className="feature-title">Faster review cycles</h2>
+              <p className="feature-copy">
+                Surface missing information and warranty signals so analysts can focus on decisions,
+                not cleanup.
+              </p>
+            </article>
+            <article className="feature-item">
+              <h2 className="feature-title">Defensible audit history</h2>
+              <p className="feature-copy">
+                Preserve status transitions, user edits, and supporting files from intake through
+                resolution.
+              </p>
+            </article>
+          </div>
+        </div>
 
-      <form action="/api/auth/login" method="post" style={{ display: "grid", gap: 12 }}>
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Email</span>
-          <input
-            type="email"
-            name="email"
-            required
-            defaultValue="admin@claimflow.local"
-            style={inputStyle}
-          />
-        </label>
+        <section className="surface-card login-panel">
+          <div className="section-heading">
+            <div>
+              <p className="section-kicker">Access</p>
+              <h2 className="section-title">Sign in to ClaimFlow</h2>
+              <p className="section-copy">
+                Use your organization credentials to enter the claims workspace.
+              </p>
+            </div>
+          </div>
 
-        <label style={{ display: "grid", gap: 6 }}>
-          <span>Password</span>
-          <input type="password" name="password" required defaultValue="Moonbeem7!" style={inputStyle} />
-        </label>
+          {errorValue ? (
+            <p className="notice notice--danger">
+              {errorValue === "no_membership"
+                ? "This user has no organization membership."
+                : errorValue === "invalid_role"
+                  ? "This user has an invalid organization role."
+                  : "Invalid email or password."}
+            </p>
+          ) : null}
 
-        <button type="submit" style={buttonStyle}>
-          Sign in
-        </button>
-      </form>
+          <form action="/api/auth/login" method="post" className="login-form">
+            <label className="field-label">
+              <span>Email</span>
+              <input
+                className="control"
+                type="email"
+                name="email"
+                required
+                defaultValue="admin@claimflow.local"
+              />
+            </label>
 
-      <p style={{ marginTop: 20, color: "#667084", fontSize: 14 }}>
-        Seeded development account: <code>admin@claimflow.local</code> / <code>Moonbeem7!</code>
-      </p>
-      <p style={{ marginTop: 12, fontSize: 14 }}>
-        <Link href="/">Back to home</Link>
-      </p>
+            <label className="field-label">
+              <span>Password</span>
+              <input
+                className="control"
+                type="password"
+                name="password"
+                required
+                defaultValue="Moonbeem7!"
+              />
+            </label>
+
+            <button type="submit" className="button button--primary">
+              Sign in
+            </button>
+          </form>
+
+          <p className="dev-hint">
+            Seeded development account: <code>admin@claimflow.local</code> / <code>Moonbeem7!</code>
+          </p>
+
+          <p className="copy-reset">
+            <Link href="/" className="inline-link">
+              Back to home
+            </Link>
+          </p>
+        </section>
+      </section>
     </main>
   );
 }
-
-const inputStyle: CSSProperties = {
-  border: "1px solid #d0d5dd",
-  borderRadius: 8,
-  padding: "10px 12px",
-  fontSize: 14,
-};
-
-const buttonStyle: CSSProperties = {
-  marginTop: 4,
-  background: "#0f172a",
-  color: "#fff",
-  border: "none",
-  borderRadius: 8,
-  padding: "10px 14px",
-  fontWeight: 600,
-  cursor: "pointer",
-};
