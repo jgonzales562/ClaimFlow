@@ -2,7 +2,10 @@ import { prisma } from "@claimflow/db";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
+import { isInlinePreviewableAttachment } from "@/lib/attachments";
 import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { formatUtcDateTime } from "@/lib/format";
+import { formatDateInput, readSearchParam } from "@/lib/claims/filters";
 import { transitionClaimStatusAction, updateClaimReviewAction } from "./actions";
 
 type ClaimDetailPageProps = {
@@ -49,9 +52,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
       createdAt: true,
       updatedAt: true,
       attachments: {
-        orderBy: {
-          createdAt: "desc",
-        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 10,
         select: {
           id: true,
@@ -63,17 +64,33 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
         },
       },
       extractions: {
-        orderBy: {
-          createdAt: "desc",
-        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 1,
         select: {
-          id: true,
           provider: true,
           model: true,
           confidence: true,
           extraction: true,
           createdAt: true,
+        },
+      },
+      events: {
+        where: {
+          organizationId: auth.organizationId,
+        },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 25,
+        select: {
+          id: true,
+          eventType: true,
+          payload: true,
+          createdAt: true,
+          actorUser: {
+            select: {
+              email: true,
+              fullName: true,
+            },
+          },
         },
       },
     },
@@ -82,29 +99,6 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
   if (!claim) {
     notFound();
   }
-
-  const events = await prisma.claimEvent.findMany({
-    where: {
-      claimId: claim.id,
-      organizationId: auth.organizationId,
-    },
-    orderBy: {
-      createdAt: "desc",
-    },
-    take: 25,
-    select: {
-      id: true,
-      eventType: true,
-      payload: true,
-      createdAt: true,
-      actorUser: {
-        select: {
-          email: true,
-          fullName: true,
-        },
-      },
-    },
-  });
 
   const latestExtraction = claim.extractions[0] ?? null;
 
@@ -134,8 +128,8 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
         <div style={metadataGridStyle}>
           <MetadataRow label="Claim ID" value={claim.externalClaimId ?? claim.id} />
           <MetadataRow label="Source Email" value={claim.sourceEmail ?? "-"} />
-          <MetadataRow label="Created" value={formatDateTime(claim.createdAt)} />
-          <MetadataRow label="Updated" value={formatDateTime(claim.updatedAt)} />
+          <MetadataRow label="Created" value={formatUtcDateTime(claim.createdAt)} />
+          <MetadataRow label="Updated" value={formatUtcDateTime(claim.updatedAt)} />
         </div>
       </section>
 
@@ -172,13 +166,13 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
               />
             </Field>
             <Field label="Purchase Date">
-              <input
-                type="date"
-                name="purchaseDate"
-                defaultValue={formatDateIso(claim.purchaseDate)}
-                style={inputStyle}
-                disabled={!canEdit}
-              />
+                <input
+                  type="date"
+                  name="purchaseDate"
+                  defaultValue={formatDateInput(claim.purchaseDate)}
+                  style={inputStyle}
+                  disabled={!canEdit}
+                />
             </Field>
             <Field label="Retailer">
               <input
@@ -285,7 +279,10 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
             <MetadataRow label="Provider" value={latestExtraction.provider} />
             <MetadataRow label="Model" value={latestExtraction.model} />
             <MetadataRow label="Confidence" value={latestExtraction.confidence.toFixed(2)} />
-            <MetadataRow label="Extracted At" value={formatDateTime(latestExtraction.createdAt)} />
+            <MetadataRow
+              label="Extracted At"
+              value={formatUtcDateTime(latestExtraction.createdAt)}
+            />
             <MetadataRow
               label="Reasoning"
               value={readExtractionReasoning(latestExtraction.extraction) ?? "-"}
@@ -317,11 +314,11 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                   <td style={tdStyle}>{attachment.originalFilename}</td>
                   <td style={tdStyle}>{attachment.contentType ?? "-"}</td>
                   <td style={tdStyle}>{formatBytes(attachment.byteSize)}</td>
-                  <td style={tdStyle}>{formatDateTime(attachment.createdAt)}</td>
+                  <td style={tdStyle}>{formatUtcDateTime(attachment.createdAt)}</td>
                   <td style={tdStyle}>
                     {attachment.uploadStatus === "STORED" ? (
                       <div style={attachmentActionStyle}>
-                        {isInlinePreviewable(attachment.contentType) ? (
+                        {isInlinePreviewableAttachment(attachment.contentType) ? (
                           <a
                             href={`/api/claims/${claim.id}/attachments/${attachment.id}/download?disposition=inline`}
                             style={inlineLinkStyle}
@@ -351,7 +348,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
 
       <section style={cardStyle}>
         <h2 style={sectionHeadingStyle}>Audit Events</h2>
-        {events.length === 0 ? (
+        {claim.events.length === 0 ? (
           <p style={{ margin: 0, color: "#667084" }}>No audit events yet.</p>
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
@@ -364,9 +361,9 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
               </tr>
             </thead>
             <tbody>
-              {events.map((event) => (
+              {claim.events.map((event) => (
                 <tr key={event.id} style={{ borderTop: "1px solid #eef2f6" }}>
-                  <td style={tdStyle}>{formatDateTime(event.createdAt)}</td>
+                  <td style={tdStyle}>{formatUtcDateTime(event.createdAt)}</td>
                   <td style={tdStyle}>{event.eventType}</td>
                   <td style={tdStyle}>
                     {event.actorUser?.fullName ?? event.actorUser?.email ?? "System"}
@@ -433,22 +430,6 @@ function mapError(value: string | null): string | null {
   }
 }
 
-function readSearchParam(
-  searchParams: Record<string, string | string[] | undefined>,
-  key: string,
-): string | null {
-  const value = searchParams[key];
-  if (typeof value === "string") {
-    return value;
-  }
-
-  if (Array.isArray(value) && value.length > 0 && typeof value[0] === "string") {
-    return value[0];
-  }
-
-  return null;
-}
-
 function readExtractionReasoning(value: unknown): string | null {
   if (typeof value !== "object" || value === null) {
     return null;
@@ -511,27 +492,6 @@ function formatBytes(value: number): string {
   }
 
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatDateIso(value: Date | null): string {
-  if (!value) {
-    return "";
-  }
-
-  return value.toISOString().slice(0, 10);
-}
-
-function formatDateTime(value: Date): string {
-  return value.toISOString().replace("T", " ").slice(0, 19);
-}
-
-function isInlinePreviewable(contentType: string | null): boolean {
-  if (!contentType) {
-    return false;
-  }
-
-  const normalized = contentType.trim().toLowerCase();
-  return normalized === "application/pdf" || normalized.startsWith("image/");
 }
 
 const cardStyle: CSSProperties = {

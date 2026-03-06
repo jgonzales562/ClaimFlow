@@ -5,7 +5,7 @@ import { verifyPassword } from "@/lib/auth/password";
 import {
   createSessionToken,
   getSessionCookieOptions,
-  type MembershipRole,
+  isMembershipRole,
   SESSION_COOKIE_NAME,
 } from "@/lib/auth/session";
 
@@ -29,9 +29,15 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 
   const user = await prisma.user.findUnique({
     where: { email },
-    include: {
+    select: {
+      id: true,
+      email: true,
+      fullName: true,
+      passwordHash: true,
       memberships: {
-        include: {
+        select: {
+          organizationId: true,
+          role: true,
           organization: {
             select: {
               id: true,
@@ -70,10 +76,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       : buildLoginErrorRedirect(request, "no_membership");
   }
 
+  if (!isMembershipRole(membership.role)) {
+    return isJsonRequest
+      ? NextResponse.json(
+          { error: "User has an invalid organization role. Contact an administrator." },
+          { status: 403 },
+        )
+      : buildLoginErrorRedirect(request, "invalid_role");
+  }
+
   const token = createSessionToken({
     userId: user.id,
     organizationId: membership.organizationId,
-    role: membership.role as MembershipRole,
+    role: membership.role,
   });
 
   const response = isJsonRequest

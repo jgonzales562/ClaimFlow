@@ -2,8 +2,21 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { CSSProperties } from "react";
 import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
-import { clampLimit, formatDateInput, parseClaimFiltersFromRecord } from "@/lib/claims/filters";
-import { listErrorClaims, type ErrorClaimRecord } from "@/lib/claims/error-claims";
+import {
+  clampLimit,
+  formatDateInput,
+  parseClaimFiltersFromRecord,
+  readSearchParam,
+  serializeFiltersToQueryParams,
+} from "@/lib/claims/filters";
+import { formatUtcDateTime } from "@/lib/format";
+import {
+  listErrorClaims,
+  parseErrorClaimsCursor,
+  parseErrorClaimsPageDirection,
+  type ErrorClaimRecord,
+  type ErrorClaimsPageDirection,
+} from "@/lib/claims/error-claims";
 
 type ErrorClaimsPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -12,6 +25,8 @@ type ErrorClaimsPageProps = {
 type ErrorClaimsResponse = {
   claims: ErrorClaimRecord[];
   count: number;
+  nextCursor: string | null;
+  prevCursor: string | null;
 };
 
 export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageProps) {
@@ -26,7 +41,11 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
 
   const resolvedSearchParams = (await searchParams) ?? {};
   const parsedFilters = parseClaimFiltersFromRecord(resolvedSearchParams);
-  const limitParam = readRawSearchParam(resolvedSearchParams, "limit");
+  const limitParam = readSearchParam(resolvedSearchParams, "limit");
+  const cursorParam = readSearchParam(resolvedSearchParams, "cursor");
+  const directionParam = readSearchParam(resolvedSearchParams, "direction");
+  const cursor = parseErrorClaimsCursor(cursorParam);
+  const direction = parseErrorClaimsPageDirection(directionParam);
   const filters = {
     search: parsedFilters.search,
     createdFrom: parsedFilters.createdFrom,
@@ -42,6 +61,8 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
       organizationId: auth.organizationId,
       filters: parsedFilters,
       limit: filters.limit,
+      cursor,
+      direction,
     });
   } catch {
     loadError = "Unable to load error claims.";
@@ -164,7 +185,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                     <div style={subtleTextStyle}>{claim.productName ?? "-"}</div>
                   </td>
                   <td style={tdStyle}>
-                    <div>{formatDateTime(claim.updatedAt)}</div>
+                    <div>{formatUtcDateTime(claim.updatedAt)}</div>
                     <div style={subtleTextStyle}>{claim.sourceEmail ?? "-"}</div>
                   </td>
                   <td style={tdStyle}>
@@ -193,35 +214,46 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
           </tbody>
         </table>
       </section>
+
+      {payload?.nextCursor || payload?.prevCursor ? (
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          {payload?.prevCursor ? (
+            <Link
+              href={buildErrorClaimsHref(filters, payload.prevCursor, "prev")}
+              style={secondaryLinkButtonStyle}
+            >
+              Previous Page
+            </Link>
+          ) : null}
+          {payload?.nextCursor ? (
+            <Link
+              href={buildErrorClaimsHref(filters, payload.nextCursor, "next")}
+              style={secondaryLinkButtonStyle}
+            >
+              Next Page
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </main>
   );
 }
 
-function readRawSearchParam(
-  searchParams: Record<string, string | string[] | undefined>,
-  key: string,
-): string | null {
-  const value = searchParams[key];
-  if (typeof value === "string") {
-    const trimmed = value.trim();
-    return trimmed ? trimmed : null;
-  }
-
-  if (Array.isArray(value) && value.length > 0 && typeof value[0] === "string") {
-    const trimmed = value[0].trim();
-    return trimmed ? trimmed : null;
-  }
-
-  return null;
-}
-
-function formatDateTime(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-
-  return date.toISOString().replace("T", " ").slice(0, 19);
+function buildErrorClaimsHref(
+  filters: { search: string | null; createdFrom: Date | null; createdTo: Date | null; limit: number },
+  cursor: string,
+  direction: ErrorClaimsPageDirection,
+): string {
+  const params = serializeFiltersToQueryParams({
+    status: null,
+    search: filters.search,
+    createdFrom: filters.createdFrom,
+    createdTo: filters.createdTo,
+  });
+  params.set("limit", String(filters.limit));
+  params.set("cursor", cursor);
+  params.set("direction", direction);
+  return `/dashboard/errors?${params.toString()}`;
 }
 
 const filterCardStyle: CSSProperties = {

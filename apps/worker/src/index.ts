@@ -7,7 +7,9 @@ import {
 import type { Message } from "@aws-sdk/client-sqs";
 import * as Sentry from "@sentry/node";
 import { PrismaClient, type Prisma } from "@prisma/client";
+import { extractErrorMessage } from "./errors.js";
 import { extractClaimData, type ClaimExtractionResult } from "./extraction.js";
+import { truncateString } from "./strings.js";
 import { extractAttachmentTextWithTextract } from "./textract.js";
 
 const prisma = new PrismaClient();
@@ -77,7 +79,6 @@ async function bootstrap(): Promise<void> {
     });
     const sqsClient = new SQSClient({
       region: config.awsRegion,
-      useQueueUrlAsEndpoint: false,
     });
     await runWorkerLoop(config, sqsClient);
   } catch (error: unknown) {
@@ -368,7 +369,7 @@ async function moveMessageToDlq(input: {
         MessageAttributes: {
           failureReason: {
             DataType: "String",
-            StringValue: truncate(input.reason, 256),
+            StringValue: truncateString(input.reason, 256),
           },
           retryable: {
             DataType: "String",
@@ -410,24 +411,50 @@ async function processClaimIngestJob(
   config: WorkerConfig,
   message: ClaimIngestQueueMessage,
 ): Promise<void> {
-  const claim = await prisma.claim.findUnique({
-    where: { id: message.claimId },
+  const inboundMessage = await prisma.inboundMessage.findUnique({
+    where: { id: message.inboundMessageId },
     select: {
       id: true,
-      organizationId: true,
-      status: true,
-      customerName: true,
-      productName: true,
-      serialNumber: true,
-      purchaseDate: true,
-      issueSummary: true,
-      retailer: true,
+      providerMessageId: true,
+      fromEmail: true,
+      subject: true,
+      textBody: true,
+      strippedTextReply: true,
+      claim: {
+        select: {
+          id: true,
+          organizationId: true,
+          status: true,
+          customerName: true,
+          productName: true,
+          serialNumber: true,
+          purchaseDate: true,
+          issueSummary: true,
+          retailer: true,
+        },
+      },
     },
   });
 
-  if (!claim) {
+  if (!inboundMessage) {
+    throw new WorkerMessageError(
+      `Inbound message "${message.inboundMessageId}" was not found for claim "${message.claimId}".`,
+      false,
+    );
+  }
+
+  if (!inboundMessage.claim) {
     throw new WorkerMessageError(
       `Claim "${message.claimId}" was not found for ingest processing.`,
+      false,
+    );
+  }
+
+  const claim = inboundMessage.claim;
+
+  if (claim.id !== message.claimId) {
+    throw new WorkerMessageError(
+      `Inbound message "${inboundMessage.id}" does not belong to claim "${message.claimId}".`,
       false,
     );
   }
@@ -445,71 +472,53 @@ async function processClaimIngestJob(
 
   if (claim.status !== "PROCESSING") {
     await prisma.$transaction(async (tx) => {
-      await tx.claim.update({
-        where: { id: claim.id },
+      const transition = await tx.claim.updateMany({
+        where: {
+          id: claim.id,
+          organizationId: claim.organizationId,
+          status: claim.status,
+        },
         data: { status: "PROCESSING" },
       });
 
-      await tx.claimEvent.create({
-        data: {
-          organizationId: claim.organizationId,
-          claimId: claim.id,
-          eventType: "STATUS_TRANSITION",
-          payload: {
-            fromStatus: claim.status,
-            toStatus: "PROCESSING",
-            source: "worker_ingest_start",
-            inboundMessageId: message.inboundMessageId,
-            providerMessageId: message.providerMessageId,
+      if (transition.count === 1) {
+        await tx.claimEvent.create({
+          data: {
+            organizationId: claim.organizationId,
+            claimId: claim.id,
+            eventType: "STATUS_TRANSITION",
+            payload: {
+              fromStatus: claim.status,
+              toStatus: "PROCESSING",
+              source: "worker_ingest_start",
+              inboundMessageId: message.inboundMessageId,
+              providerMessageId: message.providerMessageId,
+            },
           },
-        },
-      });
+        });
+      }
     });
   }
 
-  const inboundMessage = await prisma.inboundMessage.findUnique({
-    where: { id: message.inboundMessageId },
-    select: {
-      id: true,
-      claimId: true,
-      providerMessageId: true,
-      fromEmail: true,
-      subject: true,
-      textBody: true,
-      strippedTextReply: true,
-    },
-  });
-
-  if (!inboundMessage) {
-    throw new WorkerMessageError(
-      `Inbound message "${message.inboundMessageId}" was not found for claim "${message.claimId}".`,
-      false,
+  const runExtraction = (supplementalText: string | null) =>
+    extractClaimData(
+      {
+        providerMessageId: inboundMessage.providerMessageId,
+        fromEmail: inboundMessage.fromEmail,
+        subject: inboundMessage.subject,
+        textBody: inboundMessage.textBody,
+        strippedTextReply: inboundMessage.strippedTextReply,
+        claimIssueSummary: claim.issueSummary,
+        supplementalText,
+      },
+      {
+        openAiApiKey: config.openAiApiKey,
+        model: config.extractionModel,
+        maxInputChars: config.extractionMaxInputChars,
+      },
     );
-  }
 
-  if (inboundMessage.claimId !== claim.id) {
-    throw new WorkerMessageError(
-      `Inbound message "${inboundMessage.id}" does not belong to claim "${claim.id}".`,
-      false,
-    );
-  }
-
-  const primaryExtractionResult = await extractClaimData(
-    {
-      providerMessageId: inboundMessage.providerMessageId,
-      fromEmail: inboundMessage.fromEmail,
-      subject: inboundMessage.subject,
-      textBody: inboundMessage.textBody,
-      strippedTextReply: inboundMessage.strippedTextReply,
-      claimIssueSummary: claim.issueSummary,
-      supplementalText: null,
-    },
-    {
-      openAiApiKey: config.openAiApiKey,
-      model: config.extractionModel,
-      maxInputChars: config.extractionMaxInputChars,
-    },
-  );
+  const primaryExtractionResult = await runExtraction(null);
 
   const inboundTextChars = getInboundTextCharCount(inboundMessage);
 
@@ -518,9 +527,7 @@ async function processClaimIngestJob(
       claimId: claim.id,
       uploadStatus: "STORED",
     },
-    orderBy: {
-      createdAt: "asc",
-    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     select: {
       id: true,
       originalFilename: true,
@@ -561,22 +568,7 @@ async function processClaimIngestJob(
 
     if (textractResult.text) {
       try {
-        secondaryExtractionResult = await extractClaimData(
-          {
-            providerMessageId: inboundMessage.providerMessageId,
-            fromEmail: inboundMessage.fromEmail,
-            subject: inboundMessage.subject,
-            textBody: inboundMessage.textBody,
-            strippedTextReply: inboundMessage.strippedTextReply,
-            claimIssueSummary: claim.issueSummary,
-            supplementalText: textractResult.text,
-          },
-          {
-            openAiApiKey: config.openAiApiKey,
-            model: config.extractionModel,
-            maxInputChars: config.extractionMaxInputChars,
-          },
-        );
+        secondaryExtractionResult = await runExtraction(textractResult.text);
       } catch (error: unknown) {
         logError("textract_reextraction_failed", {
           claimId: claim.id,
@@ -699,27 +691,33 @@ async function markClaimAsError(input: {
       return;
     }
 
-    await tx.claim.update({
-      where: { id: claim.id },
+    const transition = await tx.claim.updateMany({
+      where: {
+        id: claim.id,
+        organizationId: claim.organizationId,
+        status: claim.status,
+      },
       data: { status: "ERROR" },
     });
 
-    await tx.claimEvent.create({
-      data: {
-        organizationId: claim.organizationId,
-        claimId: claim.id,
-        eventType: "STATUS_TRANSITION",
-        payload: {
-          fromStatus: claim.status,
-          toStatus: "ERROR",
-          source: "worker_failure",
-          failureDisposition: input.failureDisposition,
-          receiveCount: input.receiveCount,
-          retryable: input.retryable,
-          reason: input.reason,
+    if (transition.count === 1) {
+      await tx.claimEvent.create({
+        data: {
+          organizationId: claim.organizationId,
+          claimId: claim.id,
+          eventType: "STATUS_TRANSITION",
+          payload: {
+            fromStatus: claim.status,
+            toStatus: "ERROR",
+            source: "worker_failure",
+            failureDisposition: input.failureDisposition,
+            receiveCount: input.receiveCount,
+            retryable: input.retryable,
+            reason: input.reason,
+          },
         },
-      },
-    });
+      });
+    }
   });
 }
 
@@ -988,20 +986,6 @@ function parsePurchaseDate(value: string | null): Date | null {
   }
 
   return parsed;
-}
-
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return value.slice(0, maxLength);
-}
-
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Unknown error.";
 }
 
 function initWorkerSentry(config: WorkerConfig): void {

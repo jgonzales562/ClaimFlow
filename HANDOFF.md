@@ -31,7 +31,6 @@
   - `POST /api/auth/logout`
 - Claims:
   - `GET /api/claims/export`
-  - `GET /api/claims/errors`
   - `GET /api/claims/[claimId]/attachments/[attachmentId]/download`
 - Inbound:
   - `POST /api/webhooks/postmark/inbound`

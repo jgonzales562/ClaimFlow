@@ -1,4 +1,5 @@
 import { prisma } from "@claimflow/db";
+import type { Prisma } from "@prisma/client";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
 import type { NextRequest } from "next/server";
@@ -13,11 +14,27 @@ import {
   type PostmarkInboundPayload,
 } from "@/lib/postmark/inbound";
 import { enqueueClaimIngestJob, type ClaimQueueEnqueueResult } from "@/lib/queue/claims";
-import { logError } from "@/lib/observability/log";
+import { extractErrorMessage, logError } from "@/lib/observability/log";
 import { captureWebException } from "@/lib/observability/sentry";
 import { putAttachmentObject } from "@/lib/storage/s3";
 
-const ATTACHMENT_PERSIST_CONCURRENCY = 3;
+const ATTACHMENT_PERSIST_CONCURRENCY = parseIntegerEnv(
+  "POSTMARK_ATTACHMENT_PERSIST_CONCURRENCY",
+  3,
+  1,
+  10,
+);
+
+const existingInboundMessageSelect = {
+  id: true,
+  claimId: true,
+  createdAt: true,
+  claim: {
+    select: {
+      status: true,
+    },
+  },
+} as const satisfies Prisma.InboundMessageSelect;
 
 export async function POST(request: NextRequest): Promise<NextResponse> {
   if (!isAuthorizedRequest(request)) {
@@ -47,115 +64,57 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
   const providerMessageId = payload.MessageID.trim();
   const attachments = getPostmarkAttachments(payload);
 
-  const existingMessage = await prisma.inboundMessage.findUnique({
-    where: {
-      organizationId_provider_providerMessageId: {
-        organizationId: organization.id,
-        provider: "POSTMARK",
-        providerMessageId,
-      },
-    },
-    select: {
-      id: true,
-      claimId: true,
-      createdAt: true,
-      claim: {
-        select: {
-          status: true,
-        },
-      },
-    },
-  });
-
-  if (existingMessage) {
-    const queueResult = await maybeEnqueueClaimForProcessing({
-      organizationId: organization.id,
-      claimId: existingMessage.claimId,
-      inboundMessageId: existingMessage.id,
-      providerMessageId,
-      shouldEnqueue: existingMessage.claim?.status === "NEW",
-    });
-
-    if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-      logError("webhook_enqueue_deduplicated_failed", {
-        organizationId: organization.id,
-        claimId: existingMessage.claimId,
-        messageId: existingMessage.id,
-        providerMessageId,
-        queueUrl: queueResult.queueUrl,
-        error: queueResult.error,
-      });
-
-      return NextResponse.json(
-        { error: "Unable to enqueue claim for processing" },
-        { status: 500 },
-      );
-    }
-
-    return NextResponse.json({
-      ok: true,
-      deduplicated: true,
-      messageId: existingMessage.id,
-      claimId: existingMessage.claimId,
-      receivedAt: existingMessage.createdAt.toISOString(),
-      claimStatus:
-        queueResult?.enqueued === true ? "PROCESSING" : (existingMessage.claim?.status ?? null),
-      queue: queueResult,
-    });
-  }
-
   const { email: fromEmail, name: fromName } = parsePostmarkAddress(payload.From);
   const { email: toEmail } = parsePostmarkAddress(payload.To);
 
   try {
-    const created = await prisma.$transaction(async (tx) => {
-      const claim = await tx.claim.create({
-        data: {
-          organizationId: organization.id,
-          externalClaimId: `postmark:${providerMessageId}`,
-          sourceEmail: fromEmail ?? payload.From ?? null,
-          issueSummary: payload.TextBody ?? payload.StrippedTextReply ?? payload.Subject ?? null,
-          status: "NEW",
+    const created = await prisma.inboundMessage.create({
+      data: {
+        organization: {
+          connect: {
+            id: organization.id,
+          },
         },
-        select: {
-          id: true,
-          status: true,
+        provider: "POSTMARK",
+        providerMessageId,
+        mailboxHash,
+        fromEmail,
+        fromName,
+        toEmail,
+        subject: payload.Subject ?? null,
+        textBody: payload.TextBody ?? null,
+        htmlBody: payload.HtmlBody ?? null,
+        strippedTextReply: payload.StrippedTextReply ?? null,
+        receivedAt: parseReceivedAt(payload.Date),
+        rawPayload: payload as PostmarkInboundPayload,
+        claim: {
+          create: {
+            organization: {
+              connect: {
+                id: organization.id,
+              },
+            },
+            externalClaimId: `postmark:${providerMessageId}`,
+            sourceEmail: fromEmail ?? payload.From ?? null,
+            issueSummary: payload.TextBody ?? payload.StrippedTextReply ?? payload.Subject ?? null,
+            status: "NEW",
+          },
         },
-      });
-
-      const inboundMessage = await tx.inboundMessage.create({
-        data: {
-          organizationId: organization.id,
-          provider: "POSTMARK",
-          providerMessageId,
-          mailboxHash,
-          fromEmail,
-          fromName,
-          toEmail,
-          subject: payload.Subject ?? null,
-          textBody: payload.TextBody ?? null,
-          htmlBody: payload.HtmlBody ?? null,
-          strippedTextReply: payload.StrippedTextReply ?? null,
-          receivedAt: parseReceivedAt(payload.Date),
-          rawPayload: payload as PostmarkInboundPayload,
-          claimId: claim.id,
-        },
-        select: {
-          id: true,
-        },
-      });
-
-      return {
-        claimId: claim.id,
-        claimStatus: claim.status,
-        messageId: inboundMessage.id,
-      };
+      },
+      select: {
+        id: true,
+        claimId: true,
+      },
     });
+
+    if (!created.claimId) {
+      throw new Error("Inbound message claim relation was not created.");
+    }
 
     const attachmentResult = await persistAttachments({
       organizationId: organization.id,
       claimId: created.claimId,
-      inboundMessageId: created.messageId,
+      inboundMessageId: created.id,
       providerMessageId,
       attachments,
     });
@@ -163,25 +122,21 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     const queueResult = await maybeEnqueueClaimForProcessing({
       organizationId: organization.id,
       claimId: created.claimId,
-      inboundMessageId: created.messageId,
+      inboundMessageId: created.id,
       providerMessageId,
       shouldEnqueue: true,
     });
 
     if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-      logError("webhook_enqueue_claim_failed", {
+      return respondToEnqueueFailure({
+        event: "webhook_enqueue_claim_failed",
         organizationId: organization.id,
         claimId: created.claimId,
-        messageId: created.messageId,
+        messageId: created.id,
         providerMessageId,
         queueUrl: queueResult.queueUrl,
         error: queueResult.error,
       });
-
-      return NextResponse.json(
-        { error: "Unable to enqueue claim for processing" },
-        { status: 500 },
-      );
     }
 
     return NextResponse.json({
@@ -189,8 +144,8 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       deduplicated: false,
       organizationId: organization.id,
       claimId: created.claimId,
-      claimStatus: queueResult?.enqueued ? "PROCESSING" : created.claimStatus,
-      messageId: created.messageId,
+      claimStatus: queueResult?.enqueued ? "PROCESSING" : "NEW",
+      messageId: created.id,
       attachments: attachmentResult,
       queue: queueResult,
     });
@@ -205,52 +160,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
             providerMessageId,
           },
         },
-        select: {
-          id: true,
-          claimId: true,
-          createdAt: true,
-          claim: {
-            select: {
-              status: true,
-            },
-          },
-        },
+        select: existingInboundMessageSelect,
       });
 
       if (deduplicated) {
-        const queueResult = await maybeEnqueueClaimForProcessing({
+        return respondForExistingInboundMessage({
           organizationId: organization.id,
-          claimId: deduplicated.claimId,
-          inboundMessageId: deduplicated.id,
           providerMessageId,
-          shouldEnqueue: deduplicated.claim?.status === "NEW",
-        });
-
-        if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-          logError("webhook_enqueue_deduplicated_race_failed", {
-            organizationId: organization.id,
-            claimId: deduplicated.claimId,
-            messageId: deduplicated.id,
-            providerMessageId,
-            queueUrl: queueResult.queueUrl,
-            error: queueResult.error,
-          });
-
-          return NextResponse.json(
-            { error: "Unable to enqueue claim for processing" },
-            { status: 500 },
-          );
-        }
-
-        return NextResponse.json({
-          ok: true,
-          deduplicated: true,
-          messageId: deduplicated.id,
-          claimId: deduplicated.claimId,
-          receivedAt: deduplicated.createdAt.toISOString(),
-          claimStatus:
-            queueResult?.enqueued === true ? "PROCESSING" : (deduplicated.claim?.status ?? null),
-          queue: queueResult,
+          existingMessage: deduplicated,
         });
       }
     }
@@ -264,7 +181,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     logError("webhook_process_failed", {
       organizationId: organization.id,
       providerMessageId,
-      error: extractErrorMessage(error),
+      error: extractErrorMessage(error, "Unknown upload error."),
     });
 
     return NextResponse.json({ error: "Unable to process inbound message" }, { status: 500 });
@@ -352,6 +269,69 @@ function secureCompare(a: string, b: string): boolean {
   const digestA = createHash("sha256").update(a).digest();
   const digestB = createHash("sha256").update(b).digest();
   return timingSafeEqual(digestA, digestB);
+}
+
+type ExistingInboundMessageRecord = Prisma.InboundMessageGetPayload<{
+  select: typeof existingInboundMessageSelect;
+}>;
+
+async function respondForExistingInboundMessage(input: {
+  organizationId: string;
+  providerMessageId: string;
+  existingMessage: ExistingInboundMessageRecord;
+}): Promise<NextResponse> {
+  const { organizationId, providerMessageId, existingMessage } = input;
+  const queueResult = await maybeEnqueueClaimForProcessing({
+    organizationId,
+    claimId: existingMessage.claimId,
+    inboundMessageId: existingMessage.id,
+    providerMessageId,
+    shouldEnqueue: existingMessage.claim?.status === "NEW",
+  });
+
+  if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
+    return respondToEnqueueFailure({
+      event: "webhook_enqueue_deduplicated_failed",
+      organizationId,
+      claimId: existingMessage.claimId,
+      messageId: existingMessage.id,
+      providerMessageId,
+      queueUrl: queueResult.queueUrl,
+      error: queueResult.error,
+    });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    deduplicated: true,
+    messageId: existingMessage.id,
+    claimId: existingMessage.claimId,
+    receivedAt: existingMessage.createdAt.toISOString(),
+    claimStatus:
+      queueResult?.enqueued === true ? "PROCESSING" : (existingMessage.claim?.status ?? null),
+    queue: queueResult,
+  });
+}
+
+function respondToEnqueueFailure(input: {
+  event: "webhook_enqueue_claim_failed" | "webhook_enqueue_deduplicated_failed";
+  organizationId: string;
+  claimId: string | null;
+  messageId: string;
+  providerMessageId: string;
+  queueUrl: string | undefined;
+  error: string | undefined;
+}): NextResponse {
+  logError(input.event, {
+    organizationId: input.organizationId,
+    claimId: input.claimId,
+    messageId: input.messageId,
+    providerMessageId: input.providerMessageId,
+    queueUrl: input.queueUrl,
+    error: input.error,
+  });
+
+  return NextResponse.json({ error: "Unable to enqueue claim for processing" }, { status: 500 });
 }
 
 async function maybeEnqueueClaimForProcessing(input: {
@@ -529,7 +509,7 @@ async function persistSingleAttachment(input: {
 
     return { stored: true };
   } catch (error: unknown) {
-    const message = extractErrorMessage(error);
+    const message = extractErrorMessage(error, "Unknown upload error.");
     await createFailedAttachmentRecord({
       organizationId: input.organizationId,
       claimId: input.claimId,
@@ -643,9 +623,16 @@ function decodeBase64(value: string): Buffer | null {
   }
 }
 
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
+function parseIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
   }
-  return "Unknown upload error.";
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return fallback;
+  }
+
+  return parsed;
 }

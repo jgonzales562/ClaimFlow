@@ -13,6 +13,7 @@ import { captureWebException } from "@/lib/observability/sentry";
 import { extractErrorMessage, logError, logInfo } from "@/lib/observability/log";
 
 const CLAIM_EXPORT_BATCH_SIZE = 250;
+const CSV_STREAM_CHUNK_ROWS = 64;
 
 const claimExportSelect = {
   id: true,
@@ -97,17 +98,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       });
     }
 
-    const totalMatching = await prisma.claim.count({ where });
     logInfo("claims_export_completed", {
       organizationId: auth.organizationId,
       userId: auth.userId,
       format,
-      count: Math.min(totalMatching, limit),
+      count: null,
       limit,
       status: filters.status,
       hasSearch: Boolean(filters.search),
       createdFrom: filters.createdFrom?.toISOString() ?? null,
       createdTo: filters.createdTo?.toISOString() ?? null,
+      countPrecomputed: false,
     });
 
     return new NextResponse(buildCsvStream({ where, limit }), {
@@ -202,9 +203,19 @@ function buildCsvStream(input: {
         return;
       }
 
-      controller.enqueue(encoder.encode(`${claimToCsvRow(batch[batchIndex])}\n`));
-      batchIndex += 1;
-      remaining -= 1;
+      const chunkSize = Math.min(
+        CSV_STREAM_CHUNK_ROWS,
+        batch.length - batchIndex,
+        remaining,
+      );
+      const lines = batch
+        .slice(batchIndex, batchIndex + chunkSize)
+        .map(claimToCsvRow)
+        .join("\n");
+
+      controller.enqueue(encoder.encode(`${lines}\n`));
+      batchIndex += chunkSize;
+      remaining -= chunkSize;
     },
   });
 }

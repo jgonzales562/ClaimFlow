@@ -1,19 +1,42 @@
 import { prisma } from "@claimflow/db";
+import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { CSSProperties } from "react";
 import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import {
+  applyTimestampCursor,
+  encodeTimestampCursor,
+  parsePageDirection,
+  parseTimestampCursor,
+  type PageDirection,
+} from "@/lib/claims/cursor-pagination";
+import {
   buildClaimWhereInput,
   CLAIM_STATUSES,
   formatDateInput,
   parseClaimFiltersFromRecord,
+  readSearchParam,
   serializeFiltersToQueryParams,
 } from "@/lib/claims/filters";
 
 type DashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
+
+const DASHBOARD_PAGE_SIZE = 100;
+
+type DashboardPageDirection = PageDirection;
+
+const dashboardOrderByDesc: Prisma.ClaimOrderByWithRelationInput[] = [
+  { createdAt: "desc" },
+  { id: "desc" },
+];
+
+const dashboardOrderByAsc: Prisma.ClaimOrderByWithRelationInput[] = [
+  { createdAt: "asc" },
+  { id: "asc" },
+];
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
   const auth = await getAuthContext();
@@ -24,13 +47,18 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
 
   const resolvedSearchParams = (await searchParams) ?? {};
   const filters = parseClaimFiltersFromRecord(resolvedSearchParams);
+  const cursor = parseTimestampCursor(readSearchParam(resolvedSearchParams, "cursor"));
+  const direction = parsePageDirection(readSearchParam(resolvedSearchParams, "direction"));
 
-  const claims = await prisma.claim.findMany({
-    where: buildClaimWhereInput(auth.organizationId, filters),
-    orderBy: {
-      createdAt: "desc",
-    },
-    take: 100,
+  const claimsWindow = await prisma.claim.findMany({
+    where: applyTimestampCursor(
+      buildClaimWhereInput(auth.organizationId, filters),
+      cursor,
+      direction,
+      "createdAt",
+    ),
+    orderBy: direction === "prev" ? dashboardOrderByAsc : dashboardOrderByDesc,
+    take: DASHBOARD_PAGE_SIZE + 1,
     select: {
       id: true,
       externalClaimId: true,
@@ -42,6 +70,29 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
       updatedAt: true,
     },
   });
+  const hasMoreInDirection = claimsWindow.length > DASHBOARD_PAGE_SIZE;
+  const pageSlice = hasMoreInDirection ? claimsWindow.slice(0, DASHBOARD_PAGE_SIZE) : claimsWindow;
+  const claims = direction === "prev" ? [...pageSlice].reverse() : pageSlice;
+  const first = claims[0] ?? null;
+  const last = claims[claims.length - 1] ?? null;
+  const nextCursor =
+    last
+      ? direction === "prev"
+        ? encodeTimestampCursor({ timestamp: last.createdAt, id: last.id })
+        : hasMoreInDirection
+          ? encodeTimestampCursor({ timestamp: last.createdAt, id: last.id })
+          : null
+      : null;
+  const prevCursor =
+    first
+      ? direction === "prev"
+        ? hasMoreInDirection
+          ? encodeTimestampCursor({ timestamp: first.createdAt, id: first.id })
+          : null
+        : cursor
+          ? encodeTimestampCursor({ timestamp: first.createdAt, id: first.id })
+          : null
+      : null;
 
   const exportQueryParams = serializeFiltersToQueryParams(filters);
   exportQueryParams.set("limit", "1000");
@@ -203,6 +254,21 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </tbody>
         </table>
       </section>
+
+      {nextCursor || prevCursor ? (
+        <div style={{ marginTop: 12, display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          {prevCursor ? (
+            <Link href={buildDashboardPageHref(filters, prevCursor, "prev")} style={linkButtonStyle}>
+              Previous Page
+            </Link>
+          ) : null}
+          {nextCursor ? (
+            <Link href={buildDashboardPageHref(filters, nextCursor, "next")} style={linkButtonStyle}>
+              Next Page
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </main>
   );
 }
@@ -211,6 +277,17 @@ function buildExportQuery(baseParams: URLSearchParams, format: "csv" | "json"): 
   const copy = new URLSearchParams(baseParams);
   copy.set("format", format);
   return copy.toString();
+}
+
+function buildDashboardPageHref(
+  filters: Parameters<typeof serializeFiltersToQueryParams>[0],
+  cursor: string,
+  direction: DashboardPageDirection,
+): string {
+  const params = serializeFiltersToQueryParams(filters);
+  params.set("cursor", cursor);
+  params.set("direction", direction);
+  return `/dashboard?${params.toString()}`;
 }
 
 const fieldLabelStyle: CSSProperties = {

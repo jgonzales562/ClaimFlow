@@ -20,10 +20,10 @@ export function logError(event: string, context: Record<string, unknown>): void 
   );
 }
 
-export function extractErrorMessage(error: unknown): string {
+export function extractErrorMessage(error: unknown, fallback = "Unknown error."): string {
   if (error instanceof Error && error.message) {
     return error.message;
   }
 
-  return "Unknown error.";
+  return fallback;
 }

@@ -2,6 +2,7 @@ import { prisma } from "@claimflow/db";
 import type { NextRequest } from "next/server";
 import { NextResponse } from "next/server";
 import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { isInlinePreviewableAttachment } from "@/lib/attachments";
 import { extractErrorMessage, logError } from "@/lib/observability/log";
 import { captureWebException } from "@/lib/observability/sentry";
 import { createSignedAttachmentAccessUrl } from "@/lib/storage/s3";
@@ -12,6 +13,8 @@ type RouteContext = {
     attachmentId: string;
   }>;
 };
+
+const ATTACHMENT_SIGNED_URL_TTL_SECONDS = parseSignedUrlTtlSeconds();
 
 export async function GET(request: NextRequest, context: RouteContext): Promise<NextResponse> {
   const auth = await getAuthContext();
@@ -34,7 +37,6 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
         organizationId: auth.organizationId,
       },
       select: {
-        id: true,
         uploadStatus: true,
         originalFilename: true,
         contentType: true,
@@ -54,7 +56,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       );
     }
 
-    if (disposition === "inline" && !isInlinePreviewable(attachment.contentType)) {
+    if (disposition === "inline" && !isInlinePreviewableAttachment(attachment.contentType)) {
       return NextResponse.json(
         { error: "Attachment content type cannot be previewed inline" },
         { status: 409 },
@@ -66,7 +68,7 @@ export async function GET(request: NextRequest, context: RouteContext): Promise<
       key: attachment.s3Key,
       filename: attachment.originalFilename,
       contentType: attachment.contentType,
-      expiresInSeconds: parseSignedUrlTtlSeconds(),
+      expiresInSeconds: ATTACHMENT_SIGNED_URL_TTL_SECONDS,
       disposition,
     });
 
@@ -114,13 +116,4 @@ function parseRequestedDisposition(value: string | null): "attachment" | "inline
   }
 
   return value.trim().toLowerCase() === "inline" ? "inline" : "attachment";
-}
-
-function isInlinePreviewable(contentType: string | null): boolean {
-  if (!contentType) {
-    return false;
-  }
-
-  const normalized = contentType.trim().toLowerCase();
-  return normalized === "application/pdf" || normalized.startsWith("image/");
 }

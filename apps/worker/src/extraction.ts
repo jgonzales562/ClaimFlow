@@ -1,5 +1,6 @@
 import OpenAI from "openai";
 import { z } from "zod";
+import { truncateNullableString, truncateString } from "./strings.js";
 
 const warrantyStatusSchema = z.enum(["LIKELY_IN_WARRANTY", "LIKELY_EXPIRED", "UNCLEAR"]);
 
@@ -118,9 +119,9 @@ export async function extractClaimData(
       fromEmail: input.fromEmail,
       subject: input.subject,
       strippedTextReply: input.strippedTextReply,
-      textBody: truncate(input.textBody, config.maxInputChars),
+      textBody: truncateNullableString(input.textBody, config.maxInputChars),
       claimIssueSummary: input.claimIssueSummary,
-      supplementalText: truncate(input.supplementalText, config.maxInputChars),
+      supplementalText: truncateNullableString(input.supplementalText, config.maxInputChars),
     },
     null,
     2,
@@ -258,20 +259,10 @@ function firstNonEmpty(...values: Array<string | null | undefined>): string | nu
 
     const trimmed = value.trim();
     if (trimmed) {
-      return truncate(trimmed, 4000);
+      return truncateString(trimmed, 4000);
     }
   }
   return null;
-}
-
-function truncate(value: string | null | undefined, maxLength: number): string | null {
-  if (!value) {
-    return null;
-  }
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return value.slice(0, maxLength);
 }
 
 function claimExtractionError(message: string, retryable: boolean): RetryableErrorLike {

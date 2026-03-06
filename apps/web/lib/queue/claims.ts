@@ -1,6 +1,7 @@
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
+import { extractErrorMessage } from "@/lib/observability/log";
 
-export type ClaimIngestQueueMessage = {
+type ClaimIngestQueueMessage = {
   version: 1;
   claimId: string;
   organizationId: string;
@@ -68,7 +69,7 @@ export async function enqueueClaimIngestJob(
       enqueued: false,
       reason: "send_failed",
       queueUrl,
-      error: extractErrorMessage(error),
+      error: extractErrorMessage(error, "Unknown SQS send error."),
     };
   }
 }
@@ -83,16 +84,6 @@ function getSqsClient(): SQSClient {
     throw new Error("AWS_REGION is required when using SQS.");
   }
 
-  sqsClientSingleton = new SQSClient({
-    region,
-    useQueueUrlAsEndpoint: false,
-  });
+  sqsClientSingleton = new SQSClient({ region });
   return sqsClientSingleton;
-}
-
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Unknown SQS send error.";
 }

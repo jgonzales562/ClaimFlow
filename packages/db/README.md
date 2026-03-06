@@ -23,3 +23,7 @@ Or directly:
 ## Environment
 
 Set `DATABASE_URL` in your environment (see `.env.example`).
+
+## Notes
+
+- Search optimizations use PostgreSQL `pg_trgm` indexes (created by migrations). Ensure extension creation is allowed in your target database.

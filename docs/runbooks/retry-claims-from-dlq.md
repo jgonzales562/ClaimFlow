@@ -89,20 +89,18 @@ done
 - Confirm claim status changes from `ERROR/PROCESSING` to `REVIEW_REQUIRED` or `READY` in dashboard.
 - Re-check DLQ depth (step 1) until near zero.
 
-## 5. Optional API Triage View
+## 5. Optional Dashboard Triage View
 
-You can fetch organization-scoped error claims plus latest worker failure metadata:
+Use the authenticated admin triage page instead:
 
-```bash
-curl -sS \
-  -H "cookie: claimflow_session=<your_session_cookie>" \
-  "http://localhost:3000/api/claims/errors?limit=50&search=&created_from=&created_to="
+```text
+http://localhost:3000/dashboard/errors
 ```
 
 Notes:
 
 - Requires an authenticated session with `ADMIN` or `OWNER` role.
-- Response includes `failure.reason`, `failure.retryable`, `failure.receiveCount`, and `failure.failureDisposition` when available.
+- The page shows the latest worker failure metadata, including `failure.reason`, `failure.retryable`, `failure.receiveCount`, and `failure.failureDisposition` when available.
 
 ## 6. Escalation Criteria
 

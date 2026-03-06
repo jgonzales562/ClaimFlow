@@ -3,9 +3,14 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export const SESSION_COOKIE_NAME = "claimflow_session";
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
 
-export type MembershipRole = "OWNER" | "ADMIN" | "ANALYST" | "VIEWER";
+export const MEMBERSHIP_ROLES = ["OWNER", "ADMIN", "ANALYST", "VIEWER"] as const;
+export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number];
 
-export type SessionPayload = {
+export function isMembershipRole(value: unknown): value is MembershipRole {
+  return typeof value === "string" && MEMBERSHIP_ROLES.some((role) => role === value);
+}
+
+type SessionPayload = {
   userId: string;
   organizationId: string;
   role: MembershipRole;
@@ -108,12 +113,10 @@ function isSessionPayload(payload: Partial<SessionPayload>): payload is SessionP
     return false;
   }
 
-  const validRoles: MembershipRole[] = ["OWNER", "ADMIN", "ANALYST", "VIEWER"];
-
   return (
     typeof payload.userId === "string" &&
     typeof payload.organizationId === "string" &&
     typeof payload.exp === "number" &&
-    validRoles.includes(payload.role as MembershipRole)
+    isMembershipRole(payload.role)
   );
 }

@@ -136,17 +136,19 @@ export function formatDateInput(value: Date | null): string {
   return value.toISOString().slice(0, 10);
 }
 
-function readSearchParam(
+export function readSearchParam(
   searchParams: Record<string, string | string[] | undefined>,
   key: string,
 ): string | null {
   const value = searchParams[key];
   if (typeof value === "string") {
-    return value;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
   }
 
   if (Array.isArray(value) && value.length > 0 && typeof value[0] === "string") {
-    return value[0];
+    const trimmed = value[0].trim();
+    return trimmed ? trimmed : null;
   }
 
   return null;

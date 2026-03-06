@@ -1,4 +1,6 @@
 import { DetectDocumentTextCommand, TextractClient } from "@aws-sdk/client-textract";
+import { extractErrorMessage } from "./errors.js";
+import { truncateString } from "./strings.js";
 
 type StoredAttachment = {
   id: string;
@@ -14,7 +16,7 @@ type TextractFallbackConfig = {
   maxTextChars: number;
 };
 
-export type TextractFallbackResult = {
+type TextractFallbackResult = {
   attempted: boolean;
   text: string | null;
   attachmentsConsidered: number;
@@ -79,12 +81,12 @@ export async function extractAttachmentTextWithTextract(input: {
     } catch (error: unknown) {
       failed.push({
         attachmentId: attachment.id,
-        reason: extractErrorMessage(error),
+        reason: extractErrorMessage(error, "Unknown Textract error."),
       });
     }
   }
 
-  const text = truncate(collectedLines.join("\n\n"), input.config.maxTextChars);
+  const text = truncateString(collectedLines.join("\n\n"), input.config.maxTextChars);
 
   return {
     attempted: considered.length > 0,
@@ -126,18 +128,4 @@ function getTextractClient(region: string): TextractClient {
 
   textractClientSingleton = new TextractClient({ region });
   return textractClientSingleton;
-}
-
-function truncate(value: string, maxLength: number): string {
-  if (value.length <= maxLength) {
-    return value;
-  }
-  return value.slice(0, maxLength);
-}
-
-function extractErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-  return "Unknown Textract error.";
 }

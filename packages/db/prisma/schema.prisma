@@ -117,6 +117,8 @@ model Claim {
 
   @@unique([organizationId, externalClaimId])
   @@index([organizationId, status, createdAt])
+  @@index([organizationId, status, updatedAt, id], map: "Claim_organizationId_status_updatedAt_id_idx")
+  @@index([organizationId, createdAt, id], map: "Claim_organizationId_createdAt_id_idx")
 }
 
 model IntegrationMailbox {
@@ -157,6 +159,7 @@ model InboundMessage {
 
   @@unique([organizationId, provider, providerMessageId])
   @@index([organizationId, createdAt])
+  @@index([claimId, createdAt], map: "InboundMessage_claimId_createdAt_idx")
 }
 
 model ClaimAttachment {
@@ -179,7 +182,8 @@ model ClaimAttachment {
   inboundMessage   InboundMessage?           @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
-  @@index([claimId])
+  @@index([claimId, createdAt, id], map: "ClaimAttachment_claimId_createdAt_id_idx")
+  @@index([claimId, uploadStatus, createdAt, id], map: "ClaimAttachment_claimId_uploadStatus_createdAt_id_idx")
   @@index([inboundMessageId])
 }
 
@@ -200,7 +204,7 @@ model ClaimExtraction {
   inboundMessage   InboundMessage?         @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
-  @@index([claimId, createdAt])
+  @@index([claimId, createdAt, id], map: "ClaimExtraction_claimId_createdAt_id_idx")
   @@index([inboundMessageId])
 }
 
@@ -217,6 +221,7 @@ model ClaimEvent {
   actorUser      User?          @relation("ClaimEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
-  @@index([claimId, createdAt])
+  @@index([claimId, createdAt, id], map: "ClaimEvent_claimId_createdAt_id_idx")
+  @@index([claimId, eventType, createdAt, id], map: "ClaimEvent_claimId_eventType_createdAt_id_idx")
   @@index([actorUserId, createdAt])
 }

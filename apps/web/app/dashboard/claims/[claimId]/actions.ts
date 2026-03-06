@@ -4,13 +4,15 @@ import { prisma } from "@claimflow/db";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { formatDateInput } from "@/lib/claims/filters";
 
 const WARRANTY_STATUSES = ["LIKELY_IN_WARRANTY", "LIKELY_EXPIRED", "UNCLEAR"] as const;
 type WarrantyStatus = (typeof WARRANTY_STATUSES)[number];
+type AuthContext = NonNullable<Awaited<ReturnType<typeof getAuthContext>>>;
 
 export async function updateClaimReviewAction(formData: FormData): Promise<void> {
   const claimId = readRequiredString(formData.get("claimId"));
-  const auth = await requireAnalystAuth(`/dashboard/claims/${claimId}`);
+  const auth = await requireAnalystAuth(claimId);
 
   const claim = await prisma.claim.findFirst({
     where: {
@@ -98,8 +100,8 @@ export async function updateClaimReviewAction(formData: FormData): Promise<void>
     });
   }
 
-  const currentPurchaseDate = formatDateIso(claim.purchaseDate);
-  const updatedPurchaseDate = formatDateIso(nextValues.purchaseDate);
+  const currentPurchaseDate = formatDateInput(claim.purchaseDate) || null;
+  const updatedPurchaseDate = formatDateInput(nextValues.purchaseDate) || null;
   if (currentPurchaseDate !== updatedPurchaseDate) {
     updateData.purchaseDate = nextValues.purchaseDate;
     changedFields.push({
@@ -175,7 +177,7 @@ export async function updateClaimReviewAction(formData: FormData): Promise<void>
 
 export async function transitionClaimStatusAction(formData: FormData): Promise<void> {
   const claimId = readRequiredString(formData.get("claimId"));
-  const auth = await requireAnalystAuth(`/dashboard/claims/${claimId}`);
+  const auth = await requireAnalystAuth(claimId);
 
   const targetStatus = parseStatusTransitionTarget(formData.get("targetStatus"));
   if (!targetStatus) {
@@ -234,18 +236,15 @@ export async function transitionClaimStatusAction(formData: FormData): Promise<v
   redirect(`/dashboard/claims/${claim.id}?notice=status_updated`);
 }
 
-async function requireAnalystAuth(redirectTo: string): Promise<{
-  userId: string;
-  organizationId: string;
-  role: string;
-}> {
+async function requireAnalystAuth(claimId: string): Promise<AuthContext> {
+  const redirectTo = `/dashboard/claims/${claimId}`;
   const auth = await getAuthContext();
   if (!auth) {
     redirect(`/login?redirect=${encodeURIComponent(redirectTo)}`);
   }
 
   if (!hasMinimumRole(auth.role, "ANALYST")) {
-    redirect(`/dashboard/claims/${readClaimIdFromRedirect(redirectTo)}?error=forbidden`);
+    redirect(`${redirectTo}?error=forbidden`);
   }
 
   return auth;
@@ -343,17 +342,4 @@ function parseStatusTransitionTarget(
   }
 
   return null;
-}
-
-function formatDateIso(value: Date | null): string | null {
-  if (!value) {
-    return null;
-  }
-
-  return value.toISOString().slice(0, 10);
-}
-
-function readClaimIdFromRedirect(path: string): string {
-  const parts = path.split("/").filter(Boolean);
-  return parts[parts.length - 1] ?? "";
 }

@@ -30,6 +30,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         >
           {errorValue === "no_membership"
             ? "This user has no organization membership."
+            : errorValue === "invalid_role"
+              ? "This user has an invalid organization role."
             : "Invalid email or password."}
         </p>
       ) : null}
