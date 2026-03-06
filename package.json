@@ -7,6 +7,7 @@
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
     "test": "pnpm --filter @claimflow/db build && TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/*.test.ts",
+    "test:e2e": "playwright test",
     "typecheck": "pnpm -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -16,8 +17,9 @@
     "db:seed": "pnpm --filter @claimflow/db seed"
   },
   "devDependencies": {
-    "@next/eslint-plugin-next": "^15.5.12",
     "@eslint/js": "^9.21.0",
+    "@next/eslint-plugin-next": "^15.5.12",
+    "@playwright/test": "^1.51.1",
     "@typescript-eslint/eslint-plugin": "^8.25.0",
     "@typescript-eslint/parser": "^8.25.0",
     "eslint": "^9.21.0",

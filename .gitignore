@@ -6,6 +6,8 @@ dist
 coverage
 *.tsbuildinfo
 .postgres-data
+playwright-report
+test-results
 
 .env
 .env.*

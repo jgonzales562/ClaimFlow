@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "next typegen && tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.876.0",
