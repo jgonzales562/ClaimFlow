@@ -315,7 +315,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
         </div>
 
         <div className="table-scroll">
-          <table className="data-table">
+          <table className="data-table data-table--responsive">
             <thead>
               <tr>
                 <th>Claim</th>
@@ -338,7 +338,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
               ) : (
                 payload.claims.map((claim) => (
                   <tr key={claim.id}>
-                    <td>
+                    <td data-label="Claim">
                       <div className="cluster">
                         <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
                           {formatTokenLabel(claim.status)}
@@ -348,21 +348,21 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                         {claim.externalClaimId ?? claim.id.slice(0, 12)}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Customer / Product">
                       <div>{claim.customerName ?? "-"}</div>
                       <span className="subtle-text">{claim.productName ?? "-"}</span>
                     </td>
-                    <td>
+                    <td data-label="Updated">
                       <div>{formatUtcDateTime(claim.updatedAt)}</div>
                       <span className="subtle-text">{claim.sourceEmail ?? "-"}</span>
                     </td>
-                    <td>
+                    <td data-label="Failure Reason">
                       <div>{claim.failure?.reason ?? "-"}</div>
                       <span className="subtle-text">
                         {claim.failure?.fromStatus ?? "?"} to {claim.failure?.toStatus ?? "?"}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Retryable">
                       <span
                         className={cx("pill", `pill--${getBooleanTone(claim.failure?.retryable)}`)}
                       >
@@ -373,8 +373,8 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                             : "No"}
                       </span>
                     </td>
-                    <td>{claim.failure?.receiveCount ?? "-"}</td>
-                    <td>
+                    <td data-label="Receive Count">{claim.failure?.receiveCount ?? "-"}</td>
+                    <td data-label="Disposition">
                       {claim.failure?.failureDisposition ? (
                         <span className="subtle-text">
                           {formatTokenLabel(claim.failure.failureDisposition)}
@@ -383,7 +383,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                         "-"
                       )}
                     </td>
-                    <td>
+                    <td data-label="Actions">
                       <Link href={`/dashboard/claims/${claim.id}`} className="table-link">
                         Open claim
                       </Link>

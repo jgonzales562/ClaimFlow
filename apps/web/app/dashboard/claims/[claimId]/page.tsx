@@ -464,7 +464,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
         </div>
 
         <div className="table-scroll">
-          <table className="data-table">
+          <table className="data-table data-table--responsive">
             <thead>
               <tr>
                 <th>Filename</th>
@@ -484,16 +484,16 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
               ) : (
                 claim.attachments.map((attachment) => (
                   <tr key={attachment.id}>
-                    <td>
+                    <td data-label="Filename">
                       <div>{attachment.originalFilename}</div>
                       <span className="subtle-text">
                         {formatTokenLabel(attachment.uploadStatus)}
                       </span>
                     </td>
-                    <td>{attachment.contentType ?? "-"}</td>
-                    <td>{formatBytes(attachment.byteSize)}</td>
-                    <td>{formatUtcDateTime(attachment.createdAt)}</td>
-                    <td>
+                    <td data-label="Type">{attachment.contentType ?? "-"}</td>
+                    <td data-label="Size">{formatBytes(attachment.byteSize)}</td>
+                    <td data-label="Uploaded">{formatUtcDateTime(attachment.createdAt)}</td>
+                    <td data-label="Actions">
                       {attachment.uploadStatus === "STORED" ? (
                         <div className="cluster">
                           {isInlinePreviewableAttachment(attachment.contentType) ? (
@@ -537,7 +537,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
         </div>
 
         <div className="table-scroll">
-          <table className="data-table">
+          <table className="data-table data-table--responsive">
             <thead>
               <tr>
                 <th>Time</th>
@@ -556,14 +556,16 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
               ) : (
                 claim.events.map((event) => (
                   <tr key={event.id}>
-                    <td>{formatUtcDateTime(event.createdAt)}</td>
-                    <td>
+                    <td data-label="Time">{formatUtcDateTime(event.createdAt)}</td>
+                    <td data-label="Type">
                       <span className={cx("pill", `pill--${getEventTone(event.eventType)}`)}>
                         {formatTokenLabel(event.eventType)}
                       </span>
                     </td>
-                    <td>{event.actorUser?.fullName ?? event.actorUser?.email ?? "System"}</td>
-                    <td>{describeEvent(event.eventType, event.payload)}</td>
+                    <td data-label="Actor">
+                      {event.actorUser?.fullName ?? event.actorUser?.email ?? "System"}
+                    </td>
+                    <td data-label="Details">{describeEvent(event.eventType, event.payload)}</td>
                   </tr>
                 ))
               )}

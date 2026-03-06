@@ -411,7 +411,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
         </div>
 
         <div className="table-scroll">
-          <table className="data-table">
+          <table className="data-table data-table--responsive">
             <thead>
               <tr>
                 <th>Claim ID</th>
@@ -433,27 +433,27 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               ) : (
                 claims.map((claim) => (
                   <tr key={claim.id}>
-                    <td>
+                    <td data-label="Claim ID">
                       <Link href={`/dashboard/claims/${claim.id}`} className="table-link">
                         {claim.externalClaimId ?? claim.id.slice(0, 10)}
                       </Link>
                     </td>
-                    <td>{claim.customerName ?? "-"}</td>
-                    <td>{claim.productName ?? "-"}</td>
-                    <td>
+                    <td data-label="Customer">{claim.customerName ?? "-"}</td>
+                    <td data-label="Product">{claim.productName ?? "-"}</td>
+                    <td data-label="Status">
                       <span className={cx("pill", `pill--${getClaimStatusTone(claim.status)}`)}>
                         {formatTokenLabel(claim.status)}
                       </span>
                     </td>
-                    <td>
+                    <td data-label="Warranty">
                       <span
                         className={cx("pill", `pill--${getWarrantyTone(claim.warrantyStatus)}`)}
                       >
                         {formatTokenLabel(claim.warrantyStatus)}
                       </span>
                     </td>
-                    <td>{formatDateInput(claim.createdAt)}</td>
-                    <td>{formatDateInput(claim.updatedAt)}</td>
+                    <td data-label="Created">{formatDateInput(claim.createdAt)}</td>
+                    <td data-label="Updated">{formatDateInput(claim.updatedAt)}</td>
                   </tr>
                 ))
               )}
