@@ -45,21 +45,8 @@ async function main(): Promise<void> {
     },
   });
 
-  await prisma.claim.upsert({
-    where: {
-      organizationId_externalClaimId: {
-        organizationId: organization.id,
-        externalClaimId: "seed-claim-001",
-      },
-    },
-    update: {
-      status: ClaimStatus.REVIEW_REQUIRED,
-      issueSummary: "Compressor failure after abnormal noise and cooling loss.",
-      missingInfo: ["installation_receipt"],
-    },
-    create: {
-      organizationId: organization.id,
-      createdByUserId: adminUser.id,
+  const seedClaims = [
+    {
       externalClaimId: "seed-claim-001",
       sourceEmail: "claims@dealer.example",
       customerName: "Jordan Miles",
@@ -72,7 +59,120 @@ async function main(): Promise<void> {
       missingInfo: ["installation_receipt"],
       status: ClaimStatus.REVIEW_REQUIRED,
     },
+    {
+      externalClaimId: "seed-claim-002",
+      sourceEmail: "claims@dealer.example",
+      customerName: "Casey Dalton",
+      productName: "Acme HeatCore Z500",
+      serialNumber: "ACZ500-7781",
+      purchaseDate: new Date("2025-02-20T00:00:00.000Z"),
+      issueSummary: "Unit stops heating after five minutes of runtime.",
+      retailer: "Summit Home Systems",
+      warrantyStatus: WarrantyStatus.UNCLEAR,
+      missingInfo: ["proof_of_purchase"],
+      status: ClaimStatus.REVIEW_REQUIRED,
+    },
+    {
+      externalClaimId: "seed-claim-003",
+      sourceEmail: "claims@dealer.example",
+      customerName: "Riley Chen",
+      productName: "Acme AirSense S90",
+      serialNumber: "ACS90-9912",
+      purchaseDate: new Date("2024-11-02T00:00:00.000Z"),
+      issueSummary: "Fan spins but airflow is intermittent.",
+      retailer: "Pacific Climate Supply",
+      warrantyStatus: WarrantyStatus.LIKELY_IN_WARRANTY,
+      missingInfo: [],
+      status: ClaimStatus.REVIEW_REQUIRED,
+    },
+    {
+      externalClaimId: "seed-claim-004",
+      sourceEmail: "claims@dealer.example",
+      customerName: "Morgan Patel",
+      productName: "Acme FlowMaster A7",
+      serialNumber: "ACFA7-5540",
+      purchaseDate: new Date("2024-09-12T00:00:00.000Z"),
+      issueSummary: "System logs show repeated extraction failures after attachment intake.",
+      retailer: "West Peak Distribution",
+      warrantyStatus: WarrantyStatus.UNCLEAR,
+      missingInfo: ["service_report"],
+      status: ClaimStatus.ERROR,
+    },
+  ] as const;
+
+  const seededClaimsByExternalId = new Map<string, { id: string }>();
+
+  for (const claim of seedClaims) {
+    const seededClaim = await prisma.claim.upsert({
+      where: {
+        organizationId_externalClaimId: {
+          organizationId: organization.id,
+          externalClaimId: claim.externalClaimId,
+        },
+      },
+      update: claim,
+      create: {
+        organizationId: organization.id,
+        createdByUserId: adminUser.id,
+        ...claim,
+      },
+    });
+
+    seededClaimsByExternalId.set(claim.externalClaimId, { id: seededClaim.id });
+  }
+
+  const seededErrorClaim = seededClaimsByExternalId.get("seed-claim-004");
+  if (!seededErrorClaim) {
+    throw new Error("Expected seeded error claim to exist.");
+  }
+
+  const existingWorkerFailureEvent = await prisma.claimEvent.findFirst({
+    where: {
+      organizationId: organization.id,
+      claimId: seededErrorClaim.id,
+      eventType: "STATUS_TRANSITION",
+      payload: {
+        path: ["source"],
+        equals: "worker_failure",
+      },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+    },
   });
+
+  const workerFailurePayload = {
+    fromStatus: "PROCESSING",
+    toStatus: "ERROR",
+    source: "worker_failure",
+    reason: "Document classification failed after OCR fallback.",
+    retryable: false,
+    receiveCount: 4,
+    failureDisposition: "moved_to_dlq",
+  } as const;
+
+  if (existingWorkerFailureEvent) {
+    await prisma.claimEvent.update({
+      where: {
+        id: existingWorkerFailureEvent.id,
+      },
+      data: {
+        actorUserId: null,
+        payload: workerFailurePayload,
+      },
+    });
+  } else {
+    await prisma.claimEvent.create({
+      data: {
+        organizationId: organization.id,
+        claimId: seededErrorClaim.id,
+        actorUserId: null,
+        eventType: "STATUS_TRANSITION",
+        payload: workerFailurePayload,
+      },
+    });
+  }
 
   await prisma.integrationMailbox.upsert({
     where: {
