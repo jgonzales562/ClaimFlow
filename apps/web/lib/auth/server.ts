@@ -1,5 +1,6 @@
 import { prisma } from "@claimflow/db";
 import { cookies } from "next/headers";
+import { cache } from "react";
 import {
   isMembershipRole,
   SESSION_COOKIE_NAME,
@@ -22,7 +23,7 @@ type AuthContext = {
   role: MembershipRole;
 };
 
-export async function getAuthContext(): Promise<AuthContext | null> {
+async function resolveAuthContext(): Promise<AuthContext | null> {
   const cookieStore = await cookies();
   const token = cookieStore.get(SESSION_COOKIE_NAME)?.value;
   if (!token) {
@@ -71,6 +72,17 @@ export async function getAuthContext(): Promise<AuthContext | null> {
     organizationName: membership.organization.name,
     role: membership.role,
   };
+}
+
+const getCachedAuthContextForRequest = cache(resolveAuthContext);
+
+export async function getAuthContext(): Promise<AuthContext | null> {
+  return resolveAuthContext();
+}
+
+// React request caching is only valid inside the Server Component render tree.
+export async function getCachedAuthContext(): Promise<AuthContext | null> {
+  return getCachedAuthContextForRequest();
 }
 
 export function hasMinimumRole(currentRole: MembershipRole, requiredRole: MembershipRole): boolean {

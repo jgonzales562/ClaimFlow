@@ -3,7 +3,7 @@ import type { Prisma } from "@prisma/client";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { CSSProperties } from "react";
-import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import {
   applyTimestampCursor,
   encodeTimestampCursor,
@@ -39,7 +39,7 @@ const dashboardOrderByAsc: Prisma.ClaimOrderByWithRelationInput[] = [
 ];
 
 export default async function DashboardPage({ searchParams }: DashboardPageProps) {
-  const auth = await getAuthContext();
+  const auth = await getCachedAuthContext();
   if (!auth) {
     redirect("/login");
   }

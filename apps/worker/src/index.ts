@@ -1,7 +1,15 @@
+import { transitionClaimStatusIfCurrent } from "@claimflow/db";
 import {
-  DeleteMessageCommand,
+  markClaimAsError,
+  persistClaimExtractionOutcome,
+} from "./claim-state.js";
+import {
+  deleteMessageFromQueue,
+  handleQueueProcessingFailure,
+  type ClaimIngestQueueMessage,
+} from "./queue-disposition.js";
+import {
   ReceiveMessageCommand,
-  SendMessageCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
 import type { Message } from "@aws-sdk/client-sqs";
@@ -9,19 +17,9 @@ import * as Sentry from "@sentry/node";
 import { PrismaClient, type Prisma } from "@prisma/client";
 import { extractErrorMessage } from "./errors.js";
 import { extractClaimData, type ClaimExtractionResult } from "./extraction.js";
-import { truncateString } from "./strings.js";
 import { extractAttachmentTextWithTextract } from "./textract.js";
 
 const prisma = new PrismaClient();
-
-type ClaimIngestQueueMessage = {
-  version: 1;
-  claimId: string;
-  organizationId: string;
-  inboundMessageId: string;
-  providerMessageId: string;
-  enqueuedAt: string;
-};
 
 type WorkerConfig = {
   awsRegion: string;
@@ -199,16 +197,25 @@ async function handleQueueMessage(
   try {
     queueMessage = parseQueueMessage(sqsMessage.Body);
   } catch (error: unknown) {
-    await handleProcessingFailure({
-      config,
-      sqsClient,
-      sqsMessage,
-      receiptHandle,
-      receiveCount,
-      reason: extractErrorMessage(error),
-      retryable: isRetryableError(error),
-      queueMessage: null,
-    });
+    await handleQueueProcessingFailure(
+      {
+        config,
+        sqsClient,
+        sqsMessage,
+        receiptHandle,
+        receiveCount,
+        reason: extractErrorMessage(error),
+        retryable: isRetryableError(error),
+        queueMessage: null,
+      },
+      {
+        captureExceptionFn: captureWorkerException,
+        logErrorFn: logError,
+        markClaimAsErrorFn: async (failureInput) => {
+          await markClaimAsError(prisma, failureInput);
+        },
+      },
+    );
     return;
   }
 
@@ -227,184 +234,26 @@ async function handleQueueMessage(
       inboundMessageId: queueMessage.inboundMessageId,
     });
   } catch (error: unknown) {
-    await handleProcessingFailure({
-      config,
-      sqsClient,
-      sqsMessage,
-      receiptHandle,
-      receiveCount,
-      reason: extractErrorMessage(error),
-      retryable: isRetryableError(error),
-      queueMessage,
-    });
-  }
-}
-
-async function handleProcessingFailure(input: {
-  config: WorkerConfig;
-  sqsClient: SQSClient;
-  sqsMessage: Message;
-  receiptHandle: string;
-  receiveCount: number;
-  reason: string;
-  retryable: boolean;
-  queueMessage: ClaimIngestQueueMessage | null;
-}): Promise<void> {
-  const messageId = input.sqsMessage.MessageId ?? "unknown";
-  const queueMessage = input.queueMessage;
-  const shouldMoveToDlq =
-    input.config.dlqUrl && (!input.retryable || input.receiveCount >= input.config.maxReceiveCount);
-
-  captureWorkerException(input.reason, {
-    stage: "handle_processing_failure",
-    messageId,
-    claimId: queueMessage?.claimId ?? null,
-    organizationId: queueMessage?.organizationId ?? null,
-    receiveCount: input.receiveCount,
-    retryable: input.retryable,
-    shouldMoveToDlq: Boolean(shouldMoveToDlq),
-  });
-
-  if (shouldMoveToDlq) {
-    const moved = await moveMessageToDlq({
-      config: input.config,
-      sqsClient: input.sqsClient,
-      sqsMessage: input.sqsMessage,
-      reason: input.reason,
-      retryable: input.retryable,
-      receiveCount: input.receiveCount,
-      queueMessage,
-    });
-
-    if (moved) {
-      if (queueMessage) {
-        await markClaimAsError({
-          claimId: queueMessage.claimId,
-          organizationId: queueMessage.organizationId,
-          reason: input.reason,
-          retryable: input.retryable,
-          receiveCount: input.receiveCount,
-          failureDisposition: "moved_to_dlq",
-        });
-      }
-
-      await deleteMessageFromQueue({
-        sqsClient: input.sqsClient,
-        queueUrl: input.config.queueUrl,
-        receiptHandle: input.receiptHandle,
-      });
-
-      logError("claim_ingest_moved_to_dlq", {
-        messageId,
-        claimId: queueMessage?.claimId ?? null,
-        receiveCount: input.receiveCount,
-        retryable: input.retryable,
-        reason: input.reason,
-      });
-      return;
-    }
-  }
-
-  if (!input.retryable && !input.config.dlqUrl) {
-    if (queueMessage) {
-      await markClaimAsError({
-        claimId: queueMessage.claimId,
-        organizationId: queueMessage.organizationId,
-        reason: input.reason,
-        retryable: input.retryable,
-        receiveCount: input.receiveCount,
-        failureDisposition: "dropped_non_retryable",
-      });
-    }
-
-    await deleteMessageFromQueue({
-      sqsClient: input.sqsClient,
-      queueUrl: input.config.queueUrl,
-      receiptHandle: input.receiptHandle,
-    });
-
-    logError("claim_ingest_dropped_non_retryable", {
-      messageId,
-      claimId: queueMessage?.claimId ?? null,
-      reason: input.reason,
-    });
-    return;
-  }
-
-  logError("claim_ingest_failed_retrying", {
-    messageId,
-    claimId: queueMessage?.claimId ?? null,
-    receiveCount: input.receiveCount,
-    retryable: input.retryable,
-    reason: input.reason,
-  });
-}
-
-async function moveMessageToDlq(input: {
-  config: WorkerConfig;
-  sqsClient: SQSClient;
-  sqsMessage: Message;
-  reason: string;
-  retryable: boolean;
-  receiveCount: number;
-  queueMessage: ClaimIngestQueueMessage | null;
-}): Promise<boolean> {
-  if (!input.config.dlqUrl) {
-    return false;
-  }
-
-  try {
-    await input.sqsClient.send(
-      new SendMessageCommand({
-        QueueUrl: input.config.dlqUrl,
-        MessageBody: JSON.stringify({
-          failedAt: new Date().toISOString(),
-          reason: input.reason,
-          retryable: input.retryable,
-          receiveCount: input.receiveCount,
-          queueMessage: input.queueMessage,
-          originalMessageId: input.sqsMessage.MessageId ?? null,
-          originalBody: input.sqsMessage.Body ?? null,
-        }),
-        MessageAttributes: {
-          failureReason: {
-            DataType: "String",
-            StringValue: truncateString(input.reason, 256),
-          },
-          retryable: {
-            DataType: "String",
-            StringValue: input.retryable ? "true" : "false",
-          },
-          originalMessageId: {
-            DataType: "String",
-            StringValue: input.sqsMessage.MessageId ?? "unknown",
-          },
+    await handleQueueProcessingFailure(
+      {
+        config,
+        sqsClient,
+        sqsMessage,
+        receiptHandle,
+        receiveCount,
+        reason: extractErrorMessage(error),
+        retryable: isRetryableError(error),
+        queueMessage,
+      },
+      {
+        captureExceptionFn: captureWorkerException,
+        logErrorFn: logError,
+        markClaimAsErrorFn: async (failureInput) => {
+          await markClaimAsError(prisma, failureInput);
         },
-      }),
+      },
     );
-
-    return true;
-  } catch (error: unknown) {
-    logError("queue_dlq_publish_failed", {
-      error: extractErrorMessage(error),
-      reason: input.reason,
-      originalMessageId: input.sqsMessage.MessageId ?? null,
-    });
-    return false;
   }
-}
-
-async function deleteMessageFromQueue(input: {
-  sqsClient: SQSClient;
-  queueUrl: string;
-  receiptHandle: string;
-}): Promise<void> {
-  await input.sqsClient.send(
-    new DeleteMessageCommand({
-      QueueUrl: input.queueUrl,
-      ReceiptHandle: input.receiptHandle,
-    }),
-  );
 }
 
 async function processClaimIngestJob(
@@ -472,31 +321,18 @@ async function processClaimIngestJob(
 
   if (claim.status !== "PROCESSING") {
     await prisma.$transaction(async (tx) => {
-      const transition = await tx.claim.updateMany({
-        where: {
-          id: claim.id,
-          organizationId: claim.organizationId,
-          status: claim.status,
+      await transitionClaimStatusIfCurrent({
+        tx,
+        organizationId: claim.organizationId,
+        claimId: claim.id,
+        fromStatus: claim.status,
+        toStatus: "PROCESSING",
+        payload: {
+          source: "worker_ingest_start",
+          inboundMessageId: message.inboundMessageId,
+          providerMessageId: message.providerMessageId,
         },
-        data: { status: "PROCESSING" },
       });
-
-      if (transition.count === 1) {
-        await tx.claimEvent.create({
-          data: {
-            organizationId: claim.organizationId,
-            claimId: claim.id,
-            eventType: "STATUS_TRANSITION",
-            payload: {
-              fromStatus: claim.status,
-              toStatus: "PROCESSING",
-              source: "worker_ingest_start",
-              inboundMessageId: message.inboundMessageId,
-              providerMessageId: message.providerMessageId,
-            },
-          },
-        });
-      }
     });
   }
 
@@ -604,122 +440,18 @@ async function processClaimIngestJob(
         ? "textract_fallback"
         : "openai_direct";
 
-  const extracted = selectedExtraction.extraction;
-  const nextStatus =
-    extracted.confidence >= config.extractionReadyConfidence && extracted.missingInfo.length === 0
-      ? "READY"
-      : "REVIEW_REQUIRED";
-
-  await prisma.$transaction(async (tx) => {
-    const createdExtraction = await tx.claimExtraction.create({
-      data: {
-        organizationId: claim.organizationId,
-        claimId: claim.id,
-        inboundMessageId: inboundMessage.id,
-        provider: selectedExtraction.provider,
-        model: selectedExtraction.model,
-        schemaVersion: selectedExtraction.schemaVersion,
-        confidence: extracted.confidence,
-        extraction: extracted as Prisma.InputJsonValue,
-        rawOutput: {
-          source: extractionSource,
-          fallbackAttempted: shouldAttemptTextract,
-          fallbackUsed: usedTextractPass,
-          inboundTextChars,
-          primary: primaryExtractionResult.rawOutput,
-          textract: textractMetadata,
-          textractPass: secondaryExtractionResult?.rawOutput ?? null,
-        } as Prisma.InputJsonValue,
-      },
-      select: {
-        id: true,
-      },
-    });
-
-    await tx.claim.update({
-      where: { id: claim.id },
-      data: {
-        customerName: extracted.customerName ?? claim.customerName,
-        productName: extracted.productName ?? claim.productName,
-        serialNumber: extracted.serialNumber ?? claim.serialNumber,
-        purchaseDate: parsePurchaseDate(extracted.purchaseDate) ?? claim.purchaseDate,
-        issueSummary: extracted.issueSummary ?? claim.issueSummary,
-        retailer: extracted.retailer ?? claim.retailer,
-        warrantyStatus: extracted.warrantyStatus,
-        missingInfo: extracted.missingInfo,
-        status: nextStatus,
-      },
-    });
-
-    await tx.claimEvent.create({
-      data: {
-        organizationId: claim.organizationId,
-        claimId: claim.id,
-        eventType: "STATUS_TRANSITION",
-        payload: {
-          fromStatus: "PROCESSING",
-          toStatus: nextStatus,
-          source: "worker_extraction",
-          extractionId: createdExtraction.id,
-          confidence: extracted.confidence,
-          fallbackUsed: usedTextractPass,
-        },
-      },
-    });
-  });
-}
-
-async function markClaimAsError(input: {
-  claimId: string;
-  organizationId: string;
-  reason: string;
-  retryable: boolean;
-  receiveCount: number;
-  failureDisposition: "moved_to_dlq" | "dropped_non_retryable";
-}): Promise<void> {
-  await prisma.$transaction(async (tx) => {
-    const claim = await tx.claim.findFirst({
-      where: {
-        id: input.claimId,
-        organizationId: input.organizationId,
-      },
-      select: {
-        id: true,
-        status: true,
-      },
-    });
-
-    if (!claim || claim.status === "ERROR") {
-      return;
-    }
-
-    const transition = await tx.claim.updateMany({
-      where: {
-        id: claim.id,
-        organizationId: input.organizationId,
-        status: claim.status,
-      },
-      data: { status: "ERROR" },
-    });
-
-    if (transition.count === 1) {
-      await tx.claimEvent.create({
-        data: {
-          organizationId: input.organizationId,
-          claimId: claim.id,
-          eventType: "STATUS_TRANSITION",
-          payload: {
-            fromStatus: claim.status,
-            toStatus: "ERROR",
-            source: "worker_failure",
-            failureDisposition: input.failureDisposition,
-            receiveCount: input.receiveCount,
-            retryable: input.retryable,
-            reason: input.reason,
-          },
-        },
-      });
-    }
+  await persistClaimExtractionOutcome(prisma, {
+    claim,
+    inboundMessageId: inboundMessage.id,
+    selectedExtraction,
+    primaryRawOutput: primaryExtractionResult.rawOutput,
+    secondaryRawOutput: secondaryExtractionResult?.rawOutput ?? null,
+    extractionSource,
+    shouldAttemptTextract,
+    usedTextractPass,
+    textractMetadata,
+    inboundTextChars,
+    extractionReadyConfidence: config.extractionReadyConfidence,
   });
 }
 
@@ -975,19 +707,6 @@ function parseBooleanEnv(name: string, fallback: boolean): boolean {
 function optionalEnv(name: string): string | null {
   const value = process.env[name]?.trim();
   return value ? value : null;
-}
-
-function parsePurchaseDate(value: string | null): Date | null {
-  if (!value) {
-    return null;
-  }
-
-  const parsed = new Date(`${value}T00:00:00.000Z`);
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-
-  return parsed;
 }
 
 function initWorkerSentry(config: WorkerConfig): void {

@@ -1,0 +1,13 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "paths": {
+      "@claimflow/db": ["packages/db/src/index.ts"],
+      "@/*": ["apps/web/*"]
+    }
+  },
+  "include": ["tests/**/*.ts", "apps/**/*.ts", "apps/**/*.tsx", "packages/**/*.ts"]
+}

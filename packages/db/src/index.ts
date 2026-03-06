@@ -1,4 +1,5 @@
 import { PrismaClient } from "@prisma/client";
+export { recordClaimStatusTransition, transitionClaimStatusIfCurrent } from "./claim-status.js";
 
 const prismaGlobal = globalThis as unknown as {
   prisma?: PrismaClient;

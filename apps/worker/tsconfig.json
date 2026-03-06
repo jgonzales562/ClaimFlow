@@ -4,6 +4,9 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "types": ["node"],
+    "paths": {
+      "@claimflow/db": ["packages/db/dist/index.d.ts"]
+    },
     "rootDir": "src",
     "noEmit": true
   },

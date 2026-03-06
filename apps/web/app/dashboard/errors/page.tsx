@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { CSSProperties } from "react";
-import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import {
   clampLimit,
   formatDateInput,
@@ -24,7 +24,7 @@ type ErrorClaimsPageProps = {
 type ErrorClaimsResponse = Awaited<ReturnType<typeof listErrorClaims>>;
 
 export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageProps) {
-  const auth = await getAuthContext();
+  const auth = await getCachedAuthContext();
   if (!auth) {
     redirect("/login");
   }

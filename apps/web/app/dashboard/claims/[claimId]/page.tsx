@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import type { CSSProperties, ReactNode } from "react";
 import { isInlinePreviewableAttachment } from "@/lib/attachments";
-import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
+import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { formatUtcDateTime } from "@/lib/format";
 import { formatDateInput, readSearchParam } from "@/lib/claims/filters";
 import { transitionClaimStatusAction, updateClaimReviewAction } from "./actions";
@@ -16,7 +16,7 @@ type ClaimDetailPageProps = {
 const WARRANTY_STATUSES = ["LIKELY_IN_WARRANTY", "LIKELY_EXPIRED", "UNCLEAR"] as const;
 
 export default async function ClaimDetailPage({ params, searchParams }: ClaimDetailPageProps) {
-  const auth = await getAuthContext();
+  const auth = await getCachedAuthContext();
   if (!auth) {
     redirect("/login");
   }

@@ -6,6 +6,7 @@
   "scripts": {
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
+    "test": "pnpm --filter @claimflow/db build && TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/*.test.ts",
     "typecheck": "pnpm -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -23,6 +24,7 @@
     "eslint-config-prettier": "^10.1.1",
     "globals": "^16.0.0",
     "prettier": "^3.5.2",
+    "tsx": "^4.20.5",
     "typescript": "^5.8.2"
   }
 }

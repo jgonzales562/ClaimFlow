@@ -32,6 +32,9 @@ importers:
       prettier:
         specifier: ^3.5.2
         version: 3.8.1
+      tsx:
+        specifier: ^4.20.5
+        version: 4.21.0
       typescript:
         specifier: ^5.8.2
         version: 5.9.3
@@ -81,6 +84,9 @@ importers:
       '@aws-sdk/client-textract':
         specifier: ^3.876.0
         version: 3.1000.0
+      '@claimflow/db':
+        specifier: workspace:*
+        version: link:../../packages/db
       '@prisma/client':
         specifier: ^6.4.1
         version: 6.19.2(prisma@6.19.2(typescript@5.9.3))(typescript@5.9.3)
