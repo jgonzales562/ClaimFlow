@@ -166,6 +166,54 @@ test("dashboard status action revalidates and redirects on success", async () =>
   assert.deepEqual(harness.revalidatedPaths, ["/dashboard", "/dashboard/claims/claim-1"]);
 });
 
+test("dashboard retry action redirects when the claim is not eligible for retry", async () => {
+  const harness = createHarness({
+    retryErroredClaimFn: async () => ({ kind: "retry_not_allowed" }),
+  });
+
+  await expectRedirect(
+    () => harness.handlers.retryClaimAction(buildRetryFormData()),
+    "/dashboard/claims/claim-1?error=claim_retry_not_allowed",
+  );
+
+  assert.equal(harness.retryCalls.length, 0);
+  assert.deepEqual(harness.revalidatedPaths, []);
+});
+
+test("dashboard retry action revalidates and redirects back to the triage page on success", async () => {
+  const harness = createHarness({
+    retryErroredClaimFn: async (input) => {
+      harness.retryCalls.push(input);
+      return {
+        kind: "retried",
+        claimId: "claim-1",
+      };
+    },
+  });
+
+  await expectRedirect(
+    () =>
+      harness.handlers.retryClaimAction(
+        buildRetryFormData({
+          returnTo: "/dashboard/errors?search=seed-claim-006&limit=50",
+        }),
+      ),
+    "/dashboard/errors?search=seed-claim-006&limit=50&notice=claim_retry_started",
+  );
+
+  assert.equal(harness.retryCalls.length, 1);
+  assert.deepEqual(harness.retryCalls[0], {
+    organizationId: DEFAULT_AUTH.organizationId,
+    actorUserId: DEFAULT_AUTH.userId,
+    claimId: "claim-1",
+  });
+  assert.deepEqual(harness.revalidatedPaths, [
+    "/dashboard",
+    "/dashboard/errors",
+    "/dashboard/claims/claim-1",
+  ]);
+});
+
 const DEFAULT_AUTH = {
   userId: "user-1",
   organizationId: "org-1",
@@ -176,6 +224,7 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
   const revalidatedPaths: string[] = [];
   const updateCalls: Array<Record<string, unknown>> = [];
   const transitionCalls: Array<Record<string, unknown>> = [];
+  const retryCalls: Array<Record<string, unknown>> = [];
 
   const handlers = createDashboardClaimActionHandlers({
     getAuthContextFn: overrides.getAuthContextFn ?? (async () => DEFAULT_AUTH),
@@ -201,6 +250,15 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
           toStatus: input.targetStatus,
         };
       }),
+    retryErroredClaimFn:
+      overrides.retryErroredClaimFn ??
+      (async (input) => {
+        retryCalls.push(input as unknown as Record<string, unknown>);
+        return {
+          kind: "retried",
+          claimId: input.claimId,
+        };
+      }),
   });
 
   return {
@@ -208,6 +266,7 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
     revalidatedPaths,
     updateCalls,
     transitionCalls,
+    retryCalls,
   };
 }
 
@@ -243,6 +302,17 @@ function buildTransitionFormData(
   const formData = new FormData();
   formData.set("claimId", overrides.claimId ?? "claim-1");
   formData.set("targetStatus", overrides.targetStatus ?? "READY");
+  return formData;
+}
+
+function buildRetryFormData(
+  overrides: Partial<{ claimId: string; returnTo: string }> = {},
+): FormData {
+  const formData = new FormData();
+  formData.set("claimId", overrides.claimId ?? "claim-1");
+  if (overrides.returnTo) {
+    formData.set("returnTo", overrides.returnTo);
+  }
   return formData;
 }
 

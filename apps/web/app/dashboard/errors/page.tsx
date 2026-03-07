@@ -24,6 +24,7 @@ import {
   parseErrorClaimsCursor,
   parseErrorClaimsPageDirection,
 } from "@/lib/claims/error-claims";
+import { mapClaimDetailError, mapClaimDetailNotice } from "@/lib/claims/claim-detail-ui";
 import {
   formatClaimReference,
   formatPercent,
@@ -32,6 +33,7 @@ import {
   getClaimStatusTone,
   toPercent,
 } from "@/lib/ui";
+import { retryClaimAction } from "../claims/[claimId]/actions";
 
 type ErrorClaimsPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -54,8 +56,11 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
   const limitParam = readSearchParam(resolvedSearchParams, "limit");
   const cursorParam = readSearchParam(resolvedSearchParams, "cursor");
   const directionParam = readSearchParam(resolvedSearchParams, "direction");
+  const notice = mapClaimDetailNotice(readSearchParam(resolvedSearchParams, "notice"));
+  const error = mapClaimDetailError(readSearchParam(resolvedSearchParams, "error"));
   const cursor = parseErrorClaimsCursor(cursorParam);
   const direction = parseErrorClaimsPageDirection(directionParam);
+  const returnTo = buildCurrentPageHref("/dashboard/errors", resolvedSearchParams);
   const filters = {
     search: parsedFilters.search,
     createdFrom: parsedFilters.createdFrom,
@@ -130,6 +135,9 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
           </Link>
         }
       />
+
+      {notice ? <NoticeBanner tone="success">{notice}</NoticeBanner> : null}
+      {error ? <NoticeBanner tone="danger">{error}</NoticeBanner> : null}
 
       <section className="summary-strip">
         <StatCard
@@ -339,9 +347,20 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                       )}
                     </td>
                     <td data-label="Actions">
-                      <Link href={`/dashboard/claims/${claim.id}`} className="table-link">
-                        Open claim
-                      </Link>
+                      <div className="cluster">
+                        {claim.failure?.retryable === true ? (
+                          <form action={retryClaimAction}>
+                            <input type="hidden" name="claimId" value={claim.id} />
+                            <input type="hidden" name="returnTo" value={returnTo} />
+                            <button type="submit" className="button button--secondary">
+                              Retry claim
+                            </button>
+                          </form>
+                        ) : null}
+                        <Link href={`/dashboard/claims/${claim.id}`} className="table-link">
+                          Open claim
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -395,4 +414,29 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
       ) : null}
     </main>
   );
+}
+
+function buildCurrentPageHref(
+  pathname: string,
+  searchParams: Record<string, string | string[] | undefined>,
+): string {
+  const params = new URLSearchParams();
+
+  for (const [key, value] of Object.entries(searchParams)) {
+    if (value === undefined) {
+      continue;
+    }
+
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        params.append(key, item);
+      }
+      continue;
+    }
+
+    params.set(key, value);
+  }
+
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
 }

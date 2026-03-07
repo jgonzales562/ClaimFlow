@@ -111,6 +111,19 @@ async function main(): Promise<void> {
       missingInfo: [],
       status: ClaimStatus.REVIEW_REQUIRED,
     },
+    {
+      externalClaimId: "seed-claim-006",
+      sourceEmail: "claims@dealer.example",
+      customerName: "Avery Sutton",
+      productName: "Acme RelayOne R4",
+      serialNumber: "ACR4-6641",
+      purchaseDate: new Date("2024-12-18T00:00:00.000Z"),
+      issueSummary: "Transient extraction error after intake. Safe to retry from the triage queue.",
+      retailer: "Central Systems Depot",
+      warrantyStatus: WarrantyStatus.UNCLEAR,
+      missingInfo: ["purchase_invoice"],
+      status: ClaimStatus.ERROR,
+    },
   ] as const;
 
   const seededClaimsByExternalId = new Map<string, { id: string }>();
@@ -137,6 +150,11 @@ async function main(): Promise<void> {
   const seededErrorClaim = seededClaimsByExternalId.get("seed-claim-004");
   if (!seededErrorClaim) {
     throw new Error("Expected seeded error claim to exist.");
+  }
+
+  const seededRetryableErrorClaim = seededClaimsByExternalId.get("seed-claim-006");
+  if (!seededRetryableErrorClaim) {
+    throw new Error("Expected seeded retryable error claim to exist.");
   }
 
   const existingWorkerFailureEvent = await prisma.claimEvent.findFirst({
@@ -186,6 +204,83 @@ async function main(): Promise<void> {
       },
     });
   }
+
+  const existingRetryableWorkerFailureEvent = await prisma.claimEvent.findFirst({
+    where: {
+      organizationId: organization.id,
+      claimId: seededRetryableErrorClaim.id,
+      eventType: "STATUS_TRANSITION",
+      payload: {
+        path: ["source"],
+        equals: "worker_failure",
+      },
+    },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: {
+      id: true,
+    },
+  });
+
+  const retryableWorkerFailurePayload = {
+    fromStatus: "PROCESSING",
+    toStatus: "ERROR",
+    source: "worker_failure",
+    reason: "OpenAI extraction request timed out before completion.",
+    retryable: true,
+    receiveCount: 2,
+    failureDisposition: "retrying",
+  } as const;
+
+  if (existingRetryableWorkerFailureEvent) {
+    await prisma.claimEvent.update({
+      where: {
+        id: existingRetryableWorkerFailureEvent.id,
+      },
+      data: {
+        actorUserId: null,
+        payload: retryableWorkerFailurePayload,
+      },
+    });
+  } else {
+    await prisma.claimEvent.create({
+      data: {
+        organizationId: organization.id,
+        claimId: seededRetryableErrorClaim.id,
+        actorUserId: null,
+        eventType: "STATUS_TRANSITION",
+        payload: retryableWorkerFailurePayload,
+      },
+    });
+  }
+
+  await prisma.inboundMessage.upsert({
+    where: {
+      organizationId_provider_providerMessageId: {
+        organizationId: organization.id,
+        provider: "POSTMARK",
+        providerMessageId: "seed-provider-message-006",
+      },
+    },
+    update: {
+      claimId: seededRetryableErrorClaim.id,
+      fromEmail: "dealer@example.com",
+      toEmail: "claims+acme@inbound.claimflow.dev",
+      subject: "Retryable seeded error claim",
+      textBody: "Retryable seeded error claim inbound body.",
+      rawPayload: { seeded: true, externalClaimId: "seed-claim-006" },
+    },
+    create: {
+      organizationId: organization.id,
+      provider: "POSTMARK",
+      providerMessageId: "seed-provider-message-006",
+      fromEmail: "dealer@example.com",
+      toEmail: "claims+acme@inbound.claimflow.dev",
+      subject: "Retryable seeded error claim",
+      textBody: "Retryable seeded error claim inbound body.",
+      rawPayload: { seeded: true, externalClaimId: "seed-claim-006" },
+      claimId: seededRetryableErrorClaim.id,
+    },
+  });
 
   const seededAttachmentClaim = seededClaimsByExternalId.get("seed-claim-005");
   if (!seededAttachmentClaim) {

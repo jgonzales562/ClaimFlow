@@ -269,6 +269,55 @@ test("dashboard status transition rejects invalid transitions without writing an
   }
 });
 
+test("dashboard status transition rejects ERROR claims without writing an event", async () => {
+  const { organizationId, userId, claimId, cleanup } = await createDashboardClaimFixture({
+    status: "ERROR",
+  });
+
+  try {
+    const result = await transitionDashboardClaimStatus(
+      {
+        organizationId,
+        actorUserId: userId,
+        claimId,
+        targetStatus: "READY",
+      },
+      {
+        prismaClient: prisma,
+      },
+    );
+
+    assert.deepEqual(result, {
+      kind: "invalid_transition",
+      claimId,
+      currentStatus: "ERROR",
+      targetStatus: "READY",
+    });
+
+    const updatedClaim = await prisma.claim.findUniqueOrThrow({
+      where: {
+        id: claimId,
+      },
+      select: {
+        status: true,
+        events: {
+          where: {
+            eventType: "STATUS_TRANSITION",
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(updatedClaim.status, "ERROR");
+    assert.equal(updatedClaim.events.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
 function readPayloadRecord(value: unknown): Record<string, unknown> {
   assert.equal(typeof value, "object");
   assert.notEqual(value, null);

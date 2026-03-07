@@ -3,6 +3,7 @@ import {
   transitionDashboardClaimStatus,
   updateClaimReview,
 } from "./review";
+import { retryErroredClaim as retryErroredClaimService } from "./retry";
 
 const WARRANTY_STATUSES = ["LIKELY_IN_WARRANTY", "LIKELY_EXPIRED", "UNCLEAR"] as const;
 type DashboardTransitionTarget = "REVIEW_REQUIRED" | "READY";
@@ -20,6 +21,7 @@ type DashboardClaimActionDependencies = {
   revalidatePathFn: (path: string) => void;
   updateClaimReviewFn?: typeof updateClaimReview;
   transitionDashboardClaimStatusFn?: typeof transitionDashboardClaimStatus;
+  retryErroredClaimFn?: typeof retryErroredClaimService;
 };
 
 export function createDashboardClaimActionHandlers(
@@ -27,10 +29,12 @@ export function createDashboardClaimActionHandlers(
 ): {
   updateClaimReviewAction: (formData: FormData) => Promise<void>;
   transitionClaimStatusAction: (formData: FormData) => Promise<void>;
+  retryClaimAction: (formData: FormData) => Promise<void>;
 } {
   const updateClaimReviewFn = dependencies.updateClaimReviewFn ?? updateClaimReview;
   const transitionDashboardClaimStatusFn =
     dependencies.transitionDashboardClaimStatusFn ?? transitionDashboardClaimStatus;
+  const retryErroredClaimFn = dependencies.retryErroredClaimFn ?? retryErroredClaimService;
 
   async function requireAnalystAuth(claimId: string): Promise<DashboardClaimActionAuthContext> {
     const redirectTo = `/dashboard/claims/${claimId}`;
@@ -122,9 +126,49 @@ export function createDashboardClaimActionHandlers(
     dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=status_updated`);
   }
 
+  async function retryClaimAction(formData: FormData): Promise<void> {
+    const claimId = readRequiredString(formData.get("claimId"));
+    const auth = await requireAnalystAuth(claimId);
+    const returnTo = parseReturnTo(formData.get("returnTo"), `/dashboard/claims/${claimId}`);
+
+    const result = await retryErroredClaimFn({
+      organizationId: auth.organizationId,
+      actorUserId: auth.userId,
+      claimId,
+    });
+
+    if (result.kind === "claim_not_found") {
+      dependencies.redirectFn("/dashboard?error=claim_not_found");
+    }
+
+    if (result.kind === "retry_not_allowed") {
+      dependencies.redirectFn(appendRedirectState(returnTo, "error", "claim_retry_not_allowed"));
+    }
+
+    if (result.kind === "retry_unavailable") {
+      dependencies.redirectFn(appendRedirectState(returnTo, "error", "claim_retry_unavailable"));
+    }
+
+    if (result.kind === "queue_not_configured") {
+      dependencies.redirectFn(
+        appendRedirectState(returnTo, "error", "claim_retry_not_configured"),
+      );
+    }
+
+    if (result.kind === "enqueue_failed") {
+      dependencies.redirectFn(appendRedirectState(returnTo, "error", "claim_retry_failed"));
+    }
+
+    dependencies.revalidatePathFn("/dashboard");
+    dependencies.revalidatePathFn("/dashboard/errors");
+    dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
+    dependencies.redirectFn(appendRedirectState(returnTo, "notice", "claim_retry_started"));
+  }
+
   return {
     updateClaimReviewAction,
     transitionClaimStatusAction,
+    retryClaimAction,
   };
 }
 
@@ -210,4 +254,32 @@ function parseStatusTransitionTarget(value: FormDataEntryValue | null): Dashboar
   }
 
   return null;
+}
+
+function parseReturnTo(value: FormDataEntryValue | null, fallback: string): string {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/dashboard")) {
+    return fallback;
+  }
+
+  return trimmed;
+}
+
+function appendRedirectState(
+  path: string,
+  key: "notice" | "error",
+  value: string,
+): string {
+  const [pathname, existingQuery = ""] = path.split("?", 2);
+  const params = new URLSearchParams(existingQuery);
+  params.delete("notice");
+  params.delete("error");
+  params.set(key, value);
+
+  const query = params.toString();
+  return query ? `${pathname}?${query}` : pathname;
 }

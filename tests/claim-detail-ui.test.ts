@@ -12,9 +12,18 @@ import {
 
 test("claim detail notice and error mappings return expected user-facing messages", () => {
   assert.equal(mapClaimDetailNotice("claim_updated"), "Claim updates saved.");
+  assert.equal(mapClaimDetailNotice("claim_retry_started"), "Claim retry queued. Processing has resumed.");
   assert.equal(mapClaimDetailNotice("status_unchanged"), "Status was already set to that value.");
   assert.equal(mapClaimDetailNotice("unknown"), null);
 
+  assert.equal(
+    mapClaimDetailError("claim_retry_not_allowed"),
+    "This claim cannot be retried from the dashboard.",
+  );
+  assert.equal(
+    mapClaimDetailError("claim_retry_not_configured"),
+    "Claim retry queue is not configured for this environment.",
+  );
   assert.equal(
     mapClaimDetailError("invalid_status_transition"),
     "This status transition is not allowed.",

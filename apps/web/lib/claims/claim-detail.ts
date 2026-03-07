@@ -1,4 +1,5 @@
 import { prisma } from "@claimflow/db";
+import { parseWorkerFailureEvent, type WorkerFailureEvent } from "./worker-failure";
 
 const CLAIM_DETAIL_ATTACHMENT_LIMIT = 10;
 const CLAIM_DETAIL_EVENT_LIMIT = 25;
@@ -19,6 +20,7 @@ export type ClaimDetailRecord = {
   createdAt: Date;
   updatedAt: Date;
   storedAttachmentCount: number;
+  latestFailure: WorkerFailureEvent | null;
   attachments: Array<{
     id: string;
     uploadStatus: "STORED" | "FAILED";
@@ -50,7 +52,7 @@ export async function loadClaimDetail(input: {
   organizationId: string;
   claimId: string;
 }): Promise<ClaimDetailRecord | null> {
-  const [claim, storedAttachmentCount] = await Promise.all([
+  const [claim, storedAttachmentCount, latestWorkerFailureEvent] = await Promise.all([
     prisma.claim.findFirst({
       where: {
         id: input.claimId,
@@ -122,6 +124,22 @@ export async function loadClaimDetail(input: {
         uploadStatus: "STORED",
       },
     }),
+    prisma.claimEvent.findFirst({
+      where: {
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        eventType: "STATUS_TRANSITION",
+        payload: {
+          path: ["source"],
+          equals: "worker_failure",
+        },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      select: {
+        createdAt: true,
+        payload: true,
+      },
+    }),
   ]);
 
   if (!claim) {
@@ -131,5 +149,8 @@ export async function loadClaimDetail(input: {
   return {
     ...claim,
     storedAttachmentCount,
+    latestFailure: latestWorkerFailureEvent
+      ? parseWorkerFailureEvent(latestWorkerFailureEvent.payload, latestWorkerFailureEvent.createdAt)
+      : null,
   };
 }

@@ -25,7 +25,7 @@ import {
   TableSection,
 } from "@/components/ui/dashboard";
 import { formatTokenLabel, getClaimStatusTone, getWarrantyTone } from "@/lib/ui";
-import { transitionClaimStatusAction, updateClaimReviewAction } from "./actions";
+import { retryClaimAction, transitionClaimStatusAction, updateClaimReviewAction } from "./actions";
 
 type ClaimDetailPageProps = {
   params: Promise<{ claimId: string }>;
@@ -250,7 +250,25 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                   </form>
                 ) : null}
 
-                {claim.status !== "REVIEW_REQUIRED" && claim.status !== "READY" ? (
+                {claim.status === "ERROR" && claim.latestFailure?.retryable === true ? (
+                  <form action={retryClaimAction}>
+                    <input type="hidden" name="claimId" value={claim.id} />
+                    <button type="submit" className="button button--primary">
+                      Retry claim
+                    </button>
+                  </form>
+                ) : null}
+
+                {claim.status === "ERROR" && claim.latestFailure?.retryable === true ? (
+                  <p className="section-copy copy-reset">
+                    The latest worker failure is marked retryable, so you can send this claim back
+                    through intake processing.
+                  </p>
+                ) : null}
+
+                {claim.status !== "REVIEW_REQUIRED" &&
+                claim.status !== "READY" &&
+                !(claim.status === "ERROR" && claim.latestFailure?.retryable === true) ? (
                   <p className="section-copy copy-reset">
                     Transition actions appear once the claim reaches review-ready states.
                   </p>

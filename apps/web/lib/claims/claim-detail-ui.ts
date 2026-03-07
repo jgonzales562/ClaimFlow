@@ -60,6 +60,8 @@ export function mapClaimDetailNotice(value: string | null): string | null {
   switch (value) {
     case "claim_updated":
       return "Claim updates saved.";
+    case "claim_retry_started":
+      return "Claim retry queued. Processing has resumed.";
     case "status_updated":
       return "Claim status updated.";
     case "status_unchanged":
@@ -73,6 +75,14 @@ export function mapClaimDetailNotice(value: string | null): string | null {
 
 export function mapClaimDetailError(value: string | null): string | null {
   switch (value) {
+    case "claim_retry_failed":
+      return "Unable to enqueue the claim retry.";
+    case "claim_retry_not_allowed":
+      return "This claim cannot be retried from the dashboard.";
+    case "claim_retry_not_configured":
+      return "Claim retry queue is not configured for this environment.";
+    case "claim_retry_unavailable":
+      return "This claim does not have enough inbound message context to retry.";
     case "forbidden":
       return "You do not have permission to perform that action.";
     case "invalid_warranty_status":

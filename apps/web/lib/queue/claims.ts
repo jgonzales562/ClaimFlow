@@ -10,6 +10,10 @@ type ClaimIngestQueueMessage = {
   enqueuedAt: string;
 };
 
+type ClaimQueueEnqueueInput = Omit<ClaimIngestQueueMessage, "version" | "enqueuedAt"> & {
+  delaySeconds?: number;
+};
+
 export type ClaimQueueEnqueueResult =
   | {
       enqueued: true;
@@ -26,8 +30,9 @@ export type ClaimQueueEnqueueResult =
 let sqsClientSingleton: SQSClient | undefined;
 
 export async function enqueueClaimIngestJob(
-  input: Omit<ClaimIngestQueueMessage, "version" | "enqueuedAt">,
+  input: ClaimQueueEnqueueInput,
 ): Promise<ClaimQueueEnqueueResult> {
+  const { delaySeconds, ...messageInput } = input;
   const queueUrl = process.env.CLAIMS_INGEST_QUEUE_URL?.trim();
   if (!queueUrl) {
     return {
@@ -38,7 +43,7 @@ export async function enqueueClaimIngestJob(
 
   const message: ClaimIngestQueueMessage = {
     version: 1,
-    ...input,
+    ...messageInput,
     enqueuedAt: new Date().toISOString(),
   };
 
@@ -47,6 +52,7 @@ export async function enqueueClaimIngestJob(
       new SendMessageCommand({
         QueueUrl: queueUrl,
         MessageBody: JSON.stringify(message),
+        DelaySeconds: normalizeDelaySeconds(delaySeconds),
       }),
     );
 
@@ -72,6 +78,14 @@ export async function enqueueClaimIngestJob(
       error: extractErrorMessage(error, "Unknown SQS send error."),
     };
   }
+}
+
+function normalizeDelaySeconds(value: number | undefined): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+
+  return Math.min(Math.max(Math.floor(value), 0), 900);
 }
 
 function getSqsClient(): SQSClient {

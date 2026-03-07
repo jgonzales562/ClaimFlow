@@ -175,7 +175,42 @@ test.describe("admin claim operator flows", () => {
     await expect(page).toHaveURL(/\/dashboard\/claims\/.+/, { timeout: 30_000 });
     await expect(page.getByText("Resolve exception")).toBeVisible();
     await expect(
+      page.getByText("Transition actions appear once the claim reaches review-ready states."),
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: "Mark as READY" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Return to REVIEW_REQUIRED" })).toHaveCount(0);
+    await expect(
       page.getByRole("cell", { name: "Processing to Error (worker_failure)" }).first(),
+    ).toBeVisible();
+  });
+
+  test("admin can see retry controls for retryable error claims", async ({ page }) => {
+    test.setTimeout(90_000);
+
+    await Promise.all([
+      page.waitForURL(/\/dashboard\/errors(?:\?|$)/),
+      page.getByRole("link", { name: "Error Triage" }).click(),
+    ]);
+
+    await page.getByLabel("Search").fill("seed-claim-006");
+    await Promise.all([
+      page.waitForURL(
+        (url) =>
+          url.pathname === "/dashboard/errors" && url.searchParams.get("search") === "seed-claim-006",
+      ),
+      page.getByRole("button", { name: "Refresh" }).click(),
+    ]);
+
+    const row = page.getByRole("row", { name: /seed-claim-006/i });
+    await expect(row.getByText("Yes", { exact: true })).toBeVisible();
+    await expect(row.getByRole("button", { name: "Retry claim" })).toBeVisible();
+
+    await row.getByRole("link", { name: "Open claim" }).click();
+    await expect(page).toHaveURL(/\/dashboard\/claims\/.+/, { timeout: 30_000 });
+    await expect(page.getByText("Resolve exception")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Retry claim" })).toBeVisible();
+    await expect(
+      page.getByText("The latest worker failure is marked retryable"),
     ).toBeVisible();
   });
 });
