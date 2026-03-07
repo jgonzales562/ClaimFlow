@@ -66,6 +66,7 @@ type QueueDispositionDependencies = {
     error: unknown,
     context: Record<string, QueueDispositionContextValue>,
   ) => void;
+  logInfoFn?: (event: string, context: Record<string, unknown>) => void;
   logErrorFn: (event: string, context: Record<string, unknown>) => void;
   nowFn?: () => Date;
 };
@@ -210,6 +211,14 @@ export async function handleQueueProcessingFailure(
         organizationId: input.queueMessage.organizationId,
         processingAttempt: input.queueMessage.processingAttempt,
         processingLeaseToken: input.queueMessage.processingLeaseToken,
+      });
+      dependencies.logInfoFn?.("claim_processing_lease_released", {
+        claimId: input.queueMessage.claimId,
+        organizationId: input.queueMessage.organizationId,
+        processingAttempt: input.queueMessage.processingAttempt,
+        processingLeaseToken: input.queueMessage.processingLeaseToken,
+        receiveCount: input.receiveCount,
+        reason: input.reason,
       });
     } catch (error: unknown) {
       dependencies.logErrorFn("claim_processing_lease_release_failed", {

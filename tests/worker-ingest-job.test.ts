@@ -182,6 +182,7 @@ test("worker ingest job ignores stale version 2 attempts once a newer attempt ex
     },
   );
   let extractionCalls = 0;
+  const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
 
   try {
     await processClaimIngestJob(
@@ -198,6 +199,9 @@ test("worker ingest job ignores stale version 2 attempts once a newer attempt ex
         extractClaimDataFn: async () => {
           extractionCalls += 1;
           return buildExtractionResult();
+        },
+        logInfoFn: (event, context) => {
+          loggedInfo.push({ event, context });
         },
         persistClaimExtractionOutcomeFn: async () => {
           throw new Error("stale attempts should not persist extraction results");
@@ -221,6 +225,18 @@ test("worker ingest job ignores stale version 2 attempts once a newer attempt ex
     assert.equal(claim.status, "PROCESSING");
     assert.equal(claim.processingAttempt, 2);
     assert.equal(claim.events.length, 0);
+    assert.deepEqual(loggedInfo, [
+      {
+        event: "claim_ingest_attempt_superseded",
+        context: {
+          claimId,
+          organizationId,
+          messageVersion: 2,
+          messageProcessingAttempt: 1,
+          currentProcessingAttempt: 2,
+        },
+      },
+    ]);
   } finally {
     await cleanup();
   }
@@ -288,6 +304,7 @@ test("worker ingest job ignores version 3 messages when the lease is already cla
     },
   );
   let extractionCalls = 0;
+  const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
 
   try {
     await processClaimIngestJob(
@@ -305,6 +322,9 @@ test("worker ingest job ignores version 3 messages when the lease is already cla
         extractClaimDataFn: async () => {
           extractionCalls += 1;
           return buildExtractionResult();
+        },
+        logInfoFn: (event, context) => {
+          loggedInfo.push({ event, context });
         },
         persistClaimExtractionOutcomeFn: async () => {
           throw new Error("claimed leases should not run extraction twice");
@@ -332,6 +352,18 @@ test("worker ingest job ignores version 3 messages when the lease is already cla
     assert.equal(claim.processingLeaseToken, "lease-current");
     assert.equal(claim.processingLeaseClaimedAt?.toISOString(), "2026-03-07T12:00:00.000Z");
     assert.equal(claim.events.length, 0);
+    assert.deepEqual(loggedInfo, [
+      {
+        event: "claim_ingest_lease_already_claimed",
+        context: {
+          claimId,
+          organizationId,
+          processingAttempt: 3,
+          processingLeaseToken: "lease-current",
+          processingLeaseClaimedAt: "2026-03-07T12:00:00.000Z",
+        },
+      },
+    ]);
   } finally {
     await cleanup();
   }

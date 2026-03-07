@@ -50,7 +50,15 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const cursor = parseTimestampCursor(readSearchParam(resolvedSearchParams, "cursor"));
   const direction = parsePageDirection(readSearchParam(resolvedSearchParams, "direction"));
 
-  const { claims, totalClaims, statusCounts, staleProcessingCount, nextCursor, prevCursor } =
+  const {
+    claims,
+    totalClaims,
+    statusCounts,
+    staleProcessingCount,
+    operationalActivity,
+    nextCursor,
+    prevCursor,
+  } =
     await listDashboardClaims({
       organizationId: auth.organizationId,
       filters,
@@ -94,7 +102,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const intakeShare = toPercent(intakeCount, totalClaims);
   const reviewLoadShare = toPercent(reviewRequiredCount + errorCount, totalClaims);
   const readyShare = toPercent(readyCount, totalClaims);
-
   const csvExportHref = buildClaimsExportHref(filters, "csv", 1000);
   const jsonExportHref = buildClaimsExportHref(filters, "json", 1000);
 
@@ -126,6 +133,30 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </>
         }
       />
+
+      {staleProcessingCount > 0 ? (
+        <PanelSection
+          kicker="Operational alert"
+          title="Stalled intake requires review"
+          copy={`${numberFormatter.format(staleProcessingCount)} stalled processing claim${
+            staleProcessingCount === 1 ? " is" : "s are"
+          } currently flagged. ${numberFormatter.format(
+            operationalActivity.watchdogRecoveryCount,
+          )} automatic recover${
+            operationalActivity.watchdogRecoveryCount === 1 ? "y" : "ies"
+          } and ${numberFormatter.format(
+            operationalActivity.manualProcessingRecoveryCount,
+          )} manual processing recover${
+            operationalActivity.manualProcessingRecoveryCount === 1 ? "y" : "ies"
+          } were recorded in the last ${operationalActivity.windowHours} hours.`}
+          accessory={<Pill tone="warning">Attention needed</Pill>}
+        >
+          <p className="section-copy copy-reset">
+            Review processing claims flagged with recovery availability to decide whether they
+            should be re-queued or investigated further.
+          </p>
+        </PanelSection>
+      ) : null}
 
       <section className="stats-grid">
         <StatCard
@@ -202,16 +233,6 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               copy={`${numberFormatter.format(reviewRequiredCount + errorCount)} claims either need review or are blocked by an exception.`}
             />
             <GlanceCard
-              tone={staleProcessingCount > 0 ? "warning" : "success"}
-              label="Stalled intake"
-              value={numberFormatter.format(staleProcessingCount)}
-              copy={
-                staleProcessingCount > 0
-                  ? "Claims have been processing longer than expected and can be recovered from the claim detail page."
-                  : "No claims are currently showing stalled processing."
-              }
-            />
-            <GlanceCard
               tone="success"
               label="Ready rate"
               value={formatPercent(readyShare)}
@@ -220,6 +241,47 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
           </div>
         </PanelSection>
       </section>
+
+      <PanelSection
+        kicker="Recovery pressure"
+        title="Operational recovery activity"
+        copy={`Recent recovery counters across the last ${operationalActivity.windowHours} hours, useful for spotting stuck intake and manual intervention pressure.`}
+      >
+        <div className="glance-grid">
+          <GlanceCard
+            tone={staleProcessingCount > 0 ? "warning" : "success"}
+            label="Stalled intake"
+            value={numberFormatter.format(staleProcessingCount)}
+            copy={
+              staleProcessingCount > 0
+                ? "Claims are still in processing beyond the stale threshold and should be inspected for recovery."
+                : "No claims are currently stalled in processing."
+            }
+          />
+          <GlanceCard
+            tone={operationalActivity.watchdogRecoveryCount > 0 ? "warning" : "neutral"}
+            label="Automatic recoveries"
+            value={numberFormatter.format(operationalActivity.watchdogRecoveryCount)}
+            copy="Claims the watchdog re-enqueued after detecting stale processing."
+          />
+          <GlanceCard
+            tone={operationalActivity.manualProcessingRecoveryCount > 0 ? "info" : "neutral"}
+            label="Manual recoveries"
+            value={numberFormatter.format(operationalActivity.manualProcessingRecoveryCount)}
+            copy="Claims operators manually re-queued from stalled processing."
+          />
+          <GlanceCard
+            tone={operationalActivity.manualRetryCount > 0 ? "info" : "neutral"}
+            label="Manual retries"
+            value={numberFormatter.format(operationalActivity.manualRetryCount)}
+            copy={
+              operationalActivity.manualRetryCount > 0
+                ? "Retry actions taken against errored claims during the current recovery window."
+                : "No manual retries have been recorded during the current recovery window."
+            }
+          />
+        </div>
+      </PanelSection>
 
       <PanelSection
         kicker="Search and export"

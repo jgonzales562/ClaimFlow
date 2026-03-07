@@ -77,6 +77,7 @@ export async function handleClaimQueueMessage<TConfig extends QueueMessageHandle
       },
       {
         captureExceptionFn: dependencies.captureExceptionFn,
+        logInfoFn: dependencies.logInfoFn,
         logErrorFn: dependencies.logErrorFn,
         markClaimAsErrorFn: dependencies.markClaimAsErrorFn,
         releaseClaimProcessingLeaseFn: dependencies.releaseClaimProcessingLeaseFn,
@@ -113,6 +114,7 @@ export async function handleClaimQueueMessage<TConfig extends QueueMessageHandle
       },
       {
         captureExceptionFn: dependencies.captureExceptionFn,
+        logInfoFn: dependencies.logInfoFn,
         logErrorFn: dependencies.logErrorFn,
         markClaimAsErrorFn: dependencies.markClaimAsErrorFn,
         releaseClaimProcessingLeaseFn: dependencies.releaseClaimProcessingLeaseFn,

@@ -18,6 +18,7 @@ test("processing watchdog re-enqueues stale claims and records an automatic reco
     });
 
   const sentCommands: Array<Record<string, unknown>> = [];
+  const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
 
   try {
     const result = await recoverStaleProcessingClaims(
@@ -36,6 +37,9 @@ test("processing watchdog re-enqueues stale claims and records an automatic reco
       {
         nowFn: () => now,
         createProcessingLeaseTokenFn: () => "lease-watchdog-1",
+        logInfoFn: (event, context) => {
+          loggedInfo.push({ event, context });
+        },
       },
     );
 
@@ -84,6 +88,19 @@ test("processing watchdog re-enqueues stale claims and records an automatic reco
     assert.equal(claim.updatedAt.toISOString(), now.toISOString());
     assert.equal(claim.events.length, 1);
     assert.equal(claim.events[0]?.actorUserId, null);
+    assert.deepEqual(
+      loggedInfo.map((entry) => entry.event),
+      ["processing_watchdog_recovered", "processing_watchdog_completed"],
+    );
+    assert.deepEqual(loggedInfo[0]?.context, {
+      claimId,
+      organizationId,
+      previousProcessingAttempt: 0,
+      nextProcessingAttempt: 1,
+      queueMessageId: "watchdog-message-1",
+      inboundMessageId,
+      providerMessageId,
+    });
     assert.deepEqual(readPayloadRecord(claim.events[0]?.payload), {
       fromStatus: "PROCESSING",
       toStatus: "PROCESSING",

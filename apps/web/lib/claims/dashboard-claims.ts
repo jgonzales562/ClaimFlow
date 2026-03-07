@@ -28,16 +28,28 @@ export type DashboardClaimRecord = {
 
 export type DashboardStatusCounts = Record<ClaimStatus, number>;
 
-export type DashboardClaimsPage = {
-  claims: DashboardClaimRecord[];
+export type DashboardOperationalActivity = {
+  windowHours: number;
+  watchdogRecoveryCount: number;
+  manualProcessingRecoveryCount: number;
+  manualRetryCount: number;
+};
+
+export type DashboardOperationalSummary = {
   totalClaims: number;
   statusCounts: DashboardStatusCounts;
   staleProcessingCount: number;
+  operationalActivity: DashboardOperationalActivity;
+};
+
+export type DashboardClaimsPage = DashboardOperationalSummary & {
+  claims: DashboardClaimRecord[];
   nextCursor: string | null;
   prevCursor: string | null;
 };
 
 const DEFAULT_DASHBOARD_PAGE_SIZE = 100;
+const DASHBOARD_ACTIVITY_WINDOW_HOURS = 24;
 
 const dashboardOrderByDesc: Prisma.ClaimOrderByWithRelationInput[] = [
   { createdAt: "desc" },
@@ -55,11 +67,15 @@ export async function listDashboardClaims(input: {
   cursor: TimestampCursor | null;
   direction: PageDirection;
   pageSize?: number;
+  now?: Date;
 }): Promise<DashboardClaimsPage> {
   const pageSize = input.pageSize ?? DEFAULT_DASHBOARD_PAGE_SIZE;
-  const staleProcessingBefore = getClaimProcessingStaleBefore();
+  const now = input.now ?? new Date();
 
-  const [claimsWindow, groupedCounts, staleProcessingCount] = await Promise.all([
+  const [
+    claimsWindow,
+    operationalSummary,
+  ] = await Promise.all([
     prisma.claim.findMany({
       where: applyTimestampCursor(
         buildClaimWhereInput(input.organizationId, input.filters),
@@ -80,35 +96,11 @@ export async function listDashboardClaims(input: {
         updatedAt: true,
       },
     }),
-    prisma.claim.groupBy({
-      by: ["status"],
-      where: {
-        organizationId: input.organizationId,
-      },
-      _count: {
-        _all: true,
-      },
-    }),
-    prisma.claim.count({
-      where: {
-        organizationId: input.organizationId,
-        status: "PROCESSING",
-        updatedAt: {
-          lte: staleProcessingBefore,
-        },
-      },
+    loadDashboardOperationalSummary({
+      organizationId: input.organizationId,
+      now,
     }),
   ]);
-
-  const statusCounts = Object.fromEntries(
-    CLAIM_STATUSES.map((status) => [status, 0]),
-  ) as DashboardStatusCounts;
-
-  for (const entry of groupedCounts) {
-    statusCounts[entry.status] = entry._count._all;
-  }
-
-  const totalClaims = groupedCounts.reduce((sum, entry) => sum + entry._count._all, 0);
   const hasMoreInDirection = claimsWindow.length > pageSize;
   const pageSlice = hasMoreInDirection ? claimsWindow.slice(0, pageSize) : claimsWindow;
   const claims = input.direction === "prev" ? [...pageSlice].reverse() : pageSlice;
@@ -134,14 +126,107 @@ export async function listDashboardClaims(input: {
     : null;
 
   return {
+    ...operationalSummary,
     claims: claims.map((claim) => ({
       ...claim,
       isProcessingStale: isClaimProcessingStale(claim.status, claim.updatedAt),
     })),
-    totalClaims,
-    statusCounts,
-    staleProcessingCount,
     nextCursor,
     prevCursor,
+  };
+}
+
+export async function loadDashboardOperationalSummary(input: {
+  organizationId: string;
+  now?: Date;
+}): Promise<DashboardOperationalSummary> {
+  const now = input.now ?? new Date();
+  const staleProcessingBefore = getClaimProcessingStaleBefore(now);
+  const activitySince = new Date(now.getTime() - DASHBOARD_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000);
+
+  const [
+    groupedCounts,
+    staleProcessingCount,
+    watchdogRecoveryCount,
+    manualProcessingRecoveryCount,
+    manualRetryCount,
+  ] = await Promise.all([
+    prisma.claim.groupBy({
+      by: ["status"],
+      where: {
+        organizationId: input.organizationId,
+      },
+      _count: {
+        _all: true,
+      },
+    }),
+    prisma.claim.count({
+      where: {
+        organizationId: input.organizationId,
+        status: "PROCESSING",
+        updatedAt: {
+          lte: staleProcessingBefore,
+        },
+      },
+    }),
+    prisma.claimEvent.count({
+      where: {
+        organizationId: input.organizationId,
+        eventType: "STATUS_TRANSITION",
+        createdAt: {
+          gte: activitySince,
+        },
+        payload: {
+          path: ["source"],
+          equals: "watchdog_processing_recovery",
+        },
+      },
+    }),
+    prisma.claimEvent.count({
+      where: {
+        organizationId: input.organizationId,
+        eventType: "STATUS_TRANSITION",
+        createdAt: {
+          gte: activitySince,
+        },
+        payload: {
+          path: ["source"],
+          equals: "manual_processing_recovery",
+        },
+      },
+    }),
+    prisma.claimEvent.count({
+      where: {
+        organizationId: input.organizationId,
+        eventType: "STATUS_TRANSITION",
+        createdAt: {
+          gte: activitySince,
+        },
+        payload: {
+          path: ["source"],
+          equals: "manual_retry",
+        },
+      },
+    }),
+  ]);
+
+  const statusCounts = Object.fromEntries(
+    CLAIM_STATUSES.map((status) => [status, 0]),
+  ) as DashboardStatusCounts;
+
+  for (const entry of groupedCounts) {
+    statusCounts[entry.status] = entry._count._all;
+  }
+
+  return {
+    totalClaims: groupedCounts.reduce((sum, entry) => sum + entry._count._all, 0),
+    statusCounts,
+    staleProcessingCount,
+    operationalActivity: {
+      windowHours: DASHBOARD_ACTIVITY_WINDOW_HOURS,
+      watchdogRecoveryCount,
+      manualProcessingRecoveryCount,
+      manualRetryCount,
+    },
   };
 }

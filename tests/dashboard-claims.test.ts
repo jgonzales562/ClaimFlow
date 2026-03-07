@@ -13,6 +13,7 @@ after(async () => {
 
 test("dashboard claims returns organization-wide status counts and filtered rows", async () => {
   const { organizationId, cleanup } = await createDashboardClaimsFixture();
+  const now = new Date("2026-02-05T12:00:00.000Z");
 
   try {
     const newestMatching = await createDashboardClaim({
@@ -58,6 +59,38 @@ test("dashboard claims returns organization-wide status counts and filtered rows
         updatedAt: new Date("2026-02-04T12:00:00.000Z"),
       });
 
+      await createDashboardClaimEvent({
+        organizationId,
+        claimId: newestMatching.id,
+        createdAt: new Date("2026-02-05T09:00:00.000Z"),
+        source: "manual_retry",
+      });
+      await createDashboardClaimEvent({
+        organizationId,
+        claimId: newestMatching.id,
+        createdAt: new Date("2026-02-05T08:00:00.000Z"),
+        source: "manual_processing_recovery",
+      });
+      await createDashboardClaimEvent({
+        organizationId,
+        claimId: newestMatching.id,
+        createdAt: new Date("2026-02-05T07:00:00.000Z"),
+        source: "watchdog_processing_recovery",
+      });
+      await createDashboardClaimEvent({
+        organizationId,
+        claimId: newestMatching.id,
+        createdAt: new Date("2026-02-03T06:00:00.000Z"),
+        source: "manual_retry",
+      });
+      await createDashboardClaimEvent({
+        organizationId: otherOrganization.organizationId,
+        claimId: "missing-claim-id",
+        createdAt: new Date("2026-02-05T07:30:00.000Z"),
+        source: "watchdog_processing_recovery",
+        createDetached: true,
+      });
+
       const result = await listDashboardClaims({
         organizationId,
         filters: {
@@ -69,6 +102,7 @@ test("dashboard claims returns organization-wide status counts and filtered rows
         cursor: null,
         direction: "next",
         pageSize: 10,
+        now,
       });
 
       assert.equal(result.totalClaims, 4);
@@ -80,6 +114,12 @@ test("dashboard claims returns organization-wide status counts and filtered rows
         ERROR: 1,
       });
       assert.equal(result.staleProcessingCount, 0);
+      assert.deepEqual(result.operationalActivity, {
+        windowHours: 24,
+        watchdogRecoveryCount: 1,
+        manualProcessingRecoveryCount: 1,
+        manualRetryCount: 1,
+      });
       assert.deepEqual(
         result.claims.map((claim) => claim.externalClaimId),
         [newestMatching.externalClaimId, "dashboard-claim-b"],
@@ -96,6 +136,7 @@ test("dashboard claims returns organization-wide status counts and filtered rows
 
 test("dashboard claims paginates forward and backward with created-at cursors", async () => {
   const { organizationId, cleanup } = await createDashboardClaimsFixture();
+  const now = new Date("2026-03-03T13:00:00.000Z");
 
   try {
     const newest = await createDashboardClaim({
@@ -134,6 +175,7 @@ test("dashboard claims paginates forward and backward with created-at cursors", 
       cursor: null,
       direction: "next",
       pageSize: 2,
+      now,
     });
 
     assert.equal(firstPage.totalClaims, 3);
@@ -160,6 +202,7 @@ test("dashboard claims paginates forward and backward with created-at cursors", 
       cursor: parseTimestampCursor(firstPage.nextCursor),
       direction: "next",
       pageSize: 2,
+      now,
     });
 
     assert.equal(secondPage.totalClaims, 3);
@@ -184,6 +227,7 @@ test("dashboard claims paginates forward and backward with created-at cursors", 
       cursor: parseTimestampCursor(secondPage.prevCursor),
       direction: "prev",
       pageSize: 2,
+      now,
     });
 
     assert.equal(previousPage.totalClaims, 3);
@@ -259,4 +303,53 @@ async function createDashboardClaim(input: {
   }
 
   return claim;
+}
+
+async function createDashboardClaimEvent(input: {
+  organizationId: string;
+  claimId: string;
+  createdAt: Date;
+  source: "manual_retry" | "manual_processing_recovery" | "watchdog_processing_recovery";
+  createDetached?: boolean;
+}) {
+  const event = await prisma.claimEvent.create({
+    data: {
+      organizationId: input.organizationId,
+      claimId: input.createDetached ? await createDetachedClaim(input.organizationId) : input.claimId,
+      eventType: "STATUS_TRANSITION",
+      payload: {
+        fromStatus: "PROCESSING",
+        toStatus: "PROCESSING",
+        source: input.source,
+      },
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  await prisma.$executeRaw`
+    UPDATE "ClaimEvent"
+    SET "createdAt" = ${input.createdAt}
+    WHERE "id" = ${event.id}
+  `;
+
+  return event.id;
+}
+
+async function createDetachedClaim(organizationId: string): Promise<string> {
+  const claim = await prisma.claim.create({
+    data: {
+      organizationId,
+      externalClaimId: `detached-claim-${randomUUID()}`,
+      sourceEmail: `detached-${randomUUID()}@example.com`,
+      issueSummary: "Detached dashboard event claim",
+      status: "PROCESSING",
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  return claim.id;
 }

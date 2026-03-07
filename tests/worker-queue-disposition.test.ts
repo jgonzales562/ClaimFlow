@@ -203,6 +203,77 @@ test("worker failure retains the source message when DLQ publishing fails", asyn
   assert.equal(deleteCommands.length, 0);
 });
 
+test("worker failure releases the processing lease before retrying a version 3 message", async () => {
+  const queueMessage: ClaimIngestQueueMessage = {
+    version: 3,
+    claimId: "claim-lease-1",
+    organizationId: "org-lease-1",
+    inboundMessageId: "inbound-lease-1",
+    providerMessageId: "provider-lease-1",
+    enqueuedAt: "2026-03-05T11:59:00.000Z",
+    processingAttempt: 2,
+    processingLeaseToken: "lease-token-2",
+  };
+  const loggedEvents: string[] = [];
+  const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
+  const releaseCalls: Array<Record<string, unknown>> = [];
+  const commands = createCommandRecorder();
+
+  const result = await handleQueueProcessingFailure(
+    {
+      config: {
+        queueUrl: "https://example.invalid/claims",
+        dlqUrl: "https://example.invalid/claims-dlq",
+        maxReceiveCount: 4,
+      },
+      sqsClient: commands.client,
+      sqsMessage: buildSqsMessage(),
+      receiptHandle: "receipt-handle-lease",
+      receiveCount: 2,
+      reason: "temporary outage",
+      retryable: true,
+      queueMessage,
+    },
+    {
+      markClaimAsErrorFn: async () => {},
+      releaseClaimProcessingLeaseFn: async (input) => {
+        releaseCalls.push(input);
+      },
+      logInfoFn: (event, context) => {
+        loggedInfo.push({ event, context });
+      },
+      logErrorFn: (event) => {
+        loggedEvents.push(event);
+      },
+    },
+  );
+
+  assert.equal(result, "retrying");
+  assert.equal(commands.sent.length, 0);
+  assert.deepEqual(releaseCalls, [
+    {
+      claimId: "claim-lease-1",
+      organizationId: "org-lease-1",
+      processingAttempt: 2,
+      processingLeaseToken: "lease-token-2",
+    },
+  ]);
+  assert.deepEqual(loggedEvents, ["claim_ingest_failed_retrying"]);
+  assert.deepEqual(loggedInfo, [
+    {
+      event: "claim_processing_lease_released",
+      context: {
+        claimId: "claim-lease-1",
+        organizationId: "org-lease-1",
+        processingAttempt: 2,
+        processingLeaseToken: "lease-token-2",
+        receiveCount: 2,
+        reason: "temporary outage",
+      },
+    },
+  ]);
+});
+
 function buildQueueMessage(): ClaimIngestQueueMessage {
   return {
     version: 1,

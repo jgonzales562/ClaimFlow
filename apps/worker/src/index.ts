@@ -186,6 +186,7 @@ async function handleQueueMessage(
     {
       processClaimIngestJobFn: (jobConfig, queueMessage) =>
         processClaimIngestJob(prisma, jobConfig, queueMessage, {
+          logInfoFn: logInfo,
           logErrorFn: logError,
         }),
       captureExceptionFn: captureWorkerException,

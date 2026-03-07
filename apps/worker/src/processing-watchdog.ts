@@ -149,8 +149,24 @@ export async function recoverStaleProcessingClaims(
 
       if (recovered) {
         result.recoveredCount += 1;
+        logInfoFn("processing_watchdog_recovered", {
+          claimId: claim.id,
+          organizationId: claim.organizationId,
+          previousProcessingAttempt: claim.processingAttempt,
+          nextProcessingAttempt: claim.processingAttempt + 1,
+          queueMessageId: messageId,
+          inboundMessageId: latestInboundMessage.id,
+          providerMessageId: latestInboundMessage.providerMessageId,
+        });
       } else {
         result.skippedCount += 1;
+        logInfoFn("processing_watchdog_recovery_skipped", {
+          claimId: claim.id,
+          organizationId: claim.organizationId,
+          previousProcessingAttempt: claim.processingAttempt,
+          inboundMessageId: latestInboundMessage.id,
+          providerMessageId: latestInboundMessage.providerMessageId,
+        });
       }
     } catch (error: unknown) {
       result.failedCount += 1;

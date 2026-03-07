@@ -30,6 +30,7 @@ type ClaimIngestJobDependencies = {
     prismaClient: PrismaClient,
     input: PersistClaimExtractionOutcomeInput,
   ) => Promise<"READY" | "REVIEW_REQUIRED">;
+  logInfoFn?: (event: string, context: Record<string, unknown>) => void;
   logErrorFn?: (event: string, context: Record<string, unknown>) => void;
 };
 
@@ -44,6 +45,7 @@ export async function processClaimIngestJob(
     dependencies.extractAttachmentTextWithTextractFn ?? extractAttachmentTextWithTextract;
   const persistClaimExtractionOutcomeFn =
     dependencies.persistClaimExtractionOutcomeFn ?? persistClaimExtractionOutcome;
+  const logInfoFn = dependencies.logInfoFn ?? (() => {});
   const logErrorFn = dependencies.logErrorFn ?? (() => {});
 
   const inboundMessage = await prismaClient.inboundMessage.findUnique({
@@ -110,6 +112,13 @@ export async function processClaimIngestJob(
 
   if (message.version === 2) {
     if (claim.processingAttempt > message.processingAttempt) {
+      logInfoFn("claim_ingest_attempt_superseded", {
+        claimId: claim.id,
+        organizationId: claim.organizationId,
+        messageVersion: message.version,
+        messageProcessingAttempt: message.processingAttempt,
+        currentProcessingAttempt: claim.processingAttempt,
+      });
       return;
     }
 
@@ -125,6 +134,13 @@ export async function processClaimIngestJob(
     }
   } else if (message.version === 3) {
     if (claim.processingAttempt > message.processingAttempt) {
+      logInfoFn("claim_ingest_attempt_superseded", {
+        claimId: claim.id,
+        organizationId: claim.organizationId,
+        messageVersion: message.version,
+        messageProcessingAttempt: message.processingAttempt,
+        currentProcessingAttempt: claim.processingAttempt,
+      });
       return;
     }
 
@@ -140,10 +156,24 @@ export async function processClaimIngestJob(
     }
 
     if (claim.processingLeaseToken !== message.processingLeaseToken) {
+      logInfoFn("claim_ingest_lease_superseded", {
+        claimId: claim.id,
+        organizationId: claim.organizationId,
+        processingAttempt: message.processingAttempt,
+        messageProcessingLeaseToken: message.processingLeaseToken,
+        currentProcessingLeaseToken: claim.processingLeaseToken,
+      });
       return;
     }
 
     if (claim.processingLeaseClaimedAt) {
+      logInfoFn("claim_ingest_lease_already_claimed", {
+        claimId: claim.id,
+        organizationId: claim.organizationId,
+        processingAttempt: message.processingAttempt,
+        processingLeaseToken: message.processingLeaseToken,
+        processingLeaseClaimedAt: claim.processingLeaseClaimedAt.toISOString(),
+      });
       return;
     }
 
@@ -155,6 +185,12 @@ export async function processClaimIngestJob(
     });
 
     if (!leaseClaimed) {
+      logInfoFn("claim_ingest_lease_claim_conflict", {
+        claimId: claim.id,
+        organizationId: claim.organizationId,
+        processingAttempt: message.processingAttempt,
+        processingLeaseToken: message.processingLeaseToken,
+      });
       return;
     }
   } else if (claim.status !== "PROCESSING") {
