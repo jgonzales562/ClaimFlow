@@ -1,9 +1,35 @@
 # ClaimFlow V1 Implementation Plan
 
-## Status Snapshot (2026-03-04)
+## Status Snapshot (2026-03-07)
 - This document started as the V1 planning backlog.
 - Tickets 1-10 listed below have been implemented in the current repository baseline.
+- The repository now also includes post-V1 hardening work that was not in the original backlog.
 - The "First 10 Tickets" section is retained for historical traceability.
+
+## Current Baseline (2026-03-07)
+
+Implemented beyond the original first 10 tickets:
+
+- Deterministic validation pipeline for Next.js route types
+- DB-backed tests for routes, loaders, worker branches, and status transitions
+- Full pipeline smoke tests for success, DLQ failure, and DLQ publish failure paths
+- Playwright operator flows for login, review, export, attachments, error triage, retry, and stale-processing recovery
+- Manual retry for retryable `ERROR` claims
+- Stale `PROCESSING` detection and manual recovery
+- Worker watchdog for stale `PROCESSING` claims
+- Processing attempt and lease-token protections to stop stale or duplicate workers from winning writes
+- Admin operations snapshot endpoint: `/api/claims/operations`
+- Bearer-token health endpoint: `/api/ops/claims/health`
+- Local PostgreSQL lifecycle helper in `scripts/local-postgres.mjs`
+
+## Current Next-Step Areas
+
+The main remaining work is operational integration rather than baseline feature delivery:
+
+- Wire `/api/ops/claims/health` into real uptime checks and alerting
+- Decide whether non-retryable `ERROR` claims need an explicit escalation or resolution workflow
+- Add deployment-facing documentation for web, worker, S3, SQS, and watchdog settings
+- Add machine-readable metrics export if logs and the current health endpoint are not enough
 
 ## 1) V1 Objective
 Build a production-usable MVP for warranty claim intake automation:
@@ -113,6 +139,7 @@ M5: Hardening
 
 Current state:
 - M1-M5 are in place for the current MVP baseline.
+- Additional post-V1 hardening listed above is also implemented.
 
 ## 8) First 10 Tickets (Original Backlog, Now Implemented)
 
@@ -218,3 +245,6 @@ Acceptance criteria:
 - Org-level isolation and RBAC enforced
 - Error handling and retry paths documented and tested
 - One pilot customer can process claims daily without manual file wrangling
+
+Status:
+- This definition of done has been met by the current repository baseline.
