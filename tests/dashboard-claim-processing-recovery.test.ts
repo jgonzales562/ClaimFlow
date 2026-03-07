@@ -2,22 +2,31 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../packages/db/src/index.ts";
-import { retryErroredClaim } from "../apps/web/lib/claims/retry.ts";
+import { recoverStaleProcessingClaim } from "../apps/web/lib/claims/processing-recovery.ts";
 
 after(async () => {
   await prisma.$disconnect();
 });
 
-test("retryErroredClaim re-enqueues retryable error claims and records manual retry transitions", async () => {
-  const { organizationId, userId, claimId, inboundMessageId, providerMessageId, cleanup } =
-    await createRetryFixture({
-      retryable: true,
+test("recoverStaleProcessingClaim re-enqueues stale processing claims and records a recovery event", async () => {
+  const now = new Date("2026-01-01T13:00:00.000Z");
+  const {
+    organizationId,
+    userId,
+    claimId,
+    inboundMessageId,
+    providerMessageId,
+    updatedAt,
+    cleanup,
+  } =
+    await createProcessingRecoveryFixture({
+      updatedAt: new Date("2026-01-01T12:00:00.000Z"),
     });
 
   const enqueueCalls: Array<Record<string, unknown>> = [];
 
   try {
-    const result = await retryErroredClaim(
+    const result = await recoverStaleProcessingClaim(
       {
         organizationId,
         actorUserId: userId,
@@ -25,20 +34,22 @@ test("retryErroredClaim re-enqueues retryable error claims and records manual re
       },
       {
         prismaClient: prisma,
-        createProcessingLeaseTokenFn: () => "lease-retry-1",
+        nowFn: () => now,
+        staleMinutes: 30,
+        createProcessingLeaseTokenFn: () => "lease-recovery-1",
         enqueueClaimIngestJobFn: async (input) => {
           enqueueCalls.push(input as unknown as Record<string, unknown>);
           return {
             enqueued: true,
             queueUrl: "https://example.invalid/claims",
-            messageId: "message-retry-1",
+            messageId: "processing-recovery-message-1",
           };
         },
       },
     );
 
     assert.deepEqual(result, {
-      kind: "retried",
+      kind: "recovered",
       claimId,
     });
 
@@ -49,7 +60,7 @@ test("retryErroredClaim re-enqueues retryable error claims and records manual re
         inboundMessageId,
         providerMessageId,
         processingAttempt: 1,
-        processingLeaseToken: "lease-retry-1",
+        processingLeaseToken: "lease-recovery-1",
         delaySeconds: 2,
       },
     ]);
@@ -61,11 +72,11 @@ test("retryErroredClaim re-enqueues retryable error claims and records manual re
       select: {
         status: true,
         processingAttempt: true,
+        updatedAt: true,
         events: {
           where: {
             eventType: "STATUS_TRANSITION",
           },
-          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
           select: {
             actorUserId: true,
             payload: true,
@@ -76,30 +87,35 @@ test("retryErroredClaim re-enqueues retryable error claims and records manual re
 
     assert.equal(claim.status, "PROCESSING");
     assert.equal(claim.processingAttempt, 1);
-    assert.equal(claim.events.length, 2);
-    assert.deepEqual(readPayloadRecord(claim.events[1]?.payload), {
-      fromStatus: "ERROR",
+    assert.equal(claim.updatedAt.toISOString(), now.toISOString());
+    assert.equal(claim.events.length, 1);
+    assert.equal(claim.events[0]?.actorUserId, userId);
+    assert.deepEqual(readPayloadRecord(claim.events[0]?.payload), {
+      fromStatus: "PROCESSING",
       toStatus: "PROCESSING",
-      source: "manual_retry",
+      source: "manual_processing_recovery",
+      queueMessageId: "processing-recovery-message-1",
       inboundMessageId,
       providerMessageId,
-      queueMessageId: "message-retry-1",
+      staleMinutes: 30,
+      previousUpdatedAt: updatedAt.toISOString(),
     });
-    assert.equal(claim.events[1]?.actorUserId, userId);
   } finally {
     await cleanup();
   }
 });
 
-test("retryErroredClaim rejects non-retryable failures without enqueuing", async () => {
-  const { organizationId, userId, claimId, cleanup } = await createRetryFixture({
-    retryable: false,
-  });
+test("recoverStaleProcessingClaim rejects fresh processing claims without enqueuing", async () => {
+  const now = new Date("2026-01-01T13:00:00.000Z");
+  const { organizationId, userId, claimId, updatedAt, cleanup } =
+    await createProcessingRecoveryFixture({
+      updatedAt: new Date("2026-01-01T12:55:00.000Z"),
+    });
 
   let enqueueCalled = false;
 
   try {
-    const result = await retryErroredClaim(
+    const result = await recoverStaleProcessingClaim(
       {
         organizationId,
         actorUserId: userId,
@@ -107,19 +123,21 @@ test("retryErroredClaim rejects non-retryable failures without enqueuing", async
       },
       {
         prismaClient: prisma,
+        nowFn: () => now,
+        staleMinutes: 30,
         enqueueClaimIngestJobFn: async () => {
           enqueueCalled = true;
           return {
             enqueued: true,
             queueUrl: "https://example.invalid/claims",
-            messageId: "message-retry-should-not-run",
+            messageId: "should-not-enqueue",
           };
         },
       },
     );
 
     assert.deepEqual(result, {
-      kind: "retry_not_allowed",
+      kind: "recovery_not_allowed",
     });
     assert.equal(enqueueCalled, false);
 
@@ -129,6 +147,7 @@ test("retryErroredClaim rejects non-retryable failures without enqueuing", async
       },
       select: {
         status: true,
+        updatedAt: true,
         events: {
           where: {
             eventType: "STATUS_TRANSITION",
@@ -140,20 +159,23 @@ test("retryErroredClaim rejects non-retryable failures without enqueuing", async
       },
     });
 
-    assert.equal(claim.status, "ERROR");
-    assert.equal(claim.events.length, 1);
+    assert.equal(claim.status, "PROCESSING");
+    assert.equal(claim.updatedAt.toISOString(), updatedAt.toISOString());
+    assert.equal(claim.events.length, 0);
   } finally {
     await cleanup();
   }
 });
 
-test("retryErroredClaim leaves claims in ERROR when the retry queue is not configured", async () => {
-  const { organizationId, userId, claimId, cleanup } = await createRetryFixture({
-    retryable: true,
-  });
+test("recoverStaleProcessingClaim leaves stale claims untouched when the queue is not configured", async () => {
+  const now = new Date("2026-01-01T13:00:00.000Z");
+  const { organizationId, userId, claimId, updatedAt, cleanup } =
+    await createProcessingRecoveryFixture({
+      updatedAt: new Date("2026-01-01T12:00:00.000Z"),
+    });
 
   try {
-    const result = await retryErroredClaim(
+    const result = await recoverStaleProcessingClaim(
       {
         organizationId,
         actorUserId: userId,
@@ -161,6 +183,8 @@ test("retryErroredClaim leaves claims in ERROR when the retry queue is not confi
       },
       {
         prismaClient: prisma,
+        nowFn: () => now,
+        staleMinutes: 30,
         enqueueClaimIngestJobFn: async () => ({
           enqueued: false,
           reason: "queue_not_configured",
@@ -178,6 +202,7 @@ test("retryErroredClaim leaves claims in ERROR when the retry queue is not confi
       },
       select: {
         status: true,
+        updatedAt: true,
         events: {
           where: {
             eventType: "STATUS_TRANSITION",
@@ -189,8 +214,9 @@ test("retryErroredClaim leaves claims in ERROR when the retry queue is not confi
       },
     });
 
-    assert.equal(claim.status, "ERROR");
-    assert.equal(claim.events.length, 1);
+    assert.equal(claim.status, "PROCESSING");
+    assert.equal(claim.updatedAt.toISOString(), updatedAt.toISOString());
+    assert.equal(claim.events.length, 0);
   } finally {
     await cleanup();
   }
@@ -202,11 +228,11 @@ function readPayloadRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-async function createRetryFixture(input: { retryable: boolean }) {
+async function createProcessingRecoveryFixture(input: { updatedAt: Date }) {
   const suffix = randomUUID();
   const user = await prisma.user.create({
     data: {
-      email: `dashboard-retry-${suffix}@example.com`,
+      email: `processing-recovery-${suffix}@example.com`,
     },
     select: {
       id: true,
@@ -215,8 +241,8 @@ async function createRetryFixture(input: { retryable: boolean }) {
 
   const organization = await prisma.organization.create({
     data: {
-      name: `Dashboard Retry ${suffix}`,
-      slug: `dashboard-retry-${suffix}`,
+      name: `Processing Recovery ${suffix}`,
+      slug: `processing-recovery-${suffix}`,
     },
     select: {
       id: true,
@@ -226,45 +252,40 @@ async function createRetryFixture(input: { retryable: boolean }) {
   const claim = await prisma.claim.create({
     data: {
       organizationId: organization.id,
-      externalClaimId: `dashboard-retry-${suffix}`,
+      externalClaimId: `processing-recovery-${suffix}`,
       sourceEmail: `claim-${suffix}@example.com`,
-      issueSummary: "Retry fixture",
-      status: "ERROR",
+      issueSummary: "Stale processing fixture",
+      status: "PROCESSING",
     },
     select: {
       id: true,
     },
   });
 
-  const providerMessageId = `provider-${suffix}`;
   const inboundMessage = await prisma.inboundMessage.create({
     data: {
       organizationId: organization.id,
       provider: "POSTMARK",
-      providerMessageId,
+      providerMessageId: `provider-${suffix}`,
       rawPayload: { seeded: true },
       claimId: claim.id,
-      subject: "Retry fixture inbound",
+      subject: "Processing recovery fixture",
     },
     select: {
       id: true,
+      providerMessageId: true,
     },
   });
 
-  await prisma.claimEvent.create({
+  const updatedClaim = await prisma.claim.update({
+    where: {
+      id: claim.id,
+    },
     data: {
-      organizationId: organization.id,
-      claimId: claim.id,
-      eventType: "STATUS_TRANSITION",
-      payload: {
-        fromStatus: "PROCESSING",
-        toStatus: "ERROR",
-        source: "worker_failure",
-        reason: "Temporary extraction failure",
-        retryable: input.retryable,
-        receiveCount: 3,
-        failureDisposition: "moved_to_dlq",
-      },
+      updatedAt: input.updatedAt,
+    },
+    select: {
+      updatedAt: true,
     },
   });
 
@@ -273,7 +294,8 @@ async function createRetryFixture(input: { retryable: boolean }) {
     userId: user.id,
     claimId: claim.id,
     inboundMessageId: inboundMessage.id,
-    providerMessageId,
+    providerMessageId: inboundMessage.providerMessageId,
+    updatedAt: updatedClaim.updatedAt,
     cleanup: async () => {
       await prisma.organization.delete({
         where: {

@@ -174,6 +174,169 @@ test("worker ingest job skips extraction for terminal claim statuses", async () 
   }
 });
 
+test("worker ingest job ignores stale version 2 attempts once a newer attempt exists", async () => {
+  const { organizationId, claimId, inboundMessageId, cleanup } = await createClaimFixture(
+    "PROCESSING",
+    {
+      processingAttempt: 2,
+    },
+  );
+  let extractionCalls = 0;
+
+  try {
+    await processClaimIngestJob(
+      prisma,
+      TEST_CONFIG,
+      buildQueueMessage({
+        version: 2,
+        processingAttempt: 1,
+        organizationId,
+        claimId,
+        inboundMessageId,
+      }),
+      {
+        extractClaimDataFn: async () => {
+          extractionCalls += 1;
+          return buildExtractionResult();
+        },
+        persistClaimExtractionOutcomeFn: async () => {
+          throw new Error("stale attempts should not persist extraction results");
+        },
+      },
+    );
+
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        processingAttempt: true,
+        events: {
+          where: { eventType: "STATUS_TRANSITION" },
+          select: { id: true },
+        },
+      },
+    });
+
+    assert.equal(extractionCalls, 0);
+    assert.equal(claim.status, "PROCESSING");
+    assert.equal(claim.processingAttempt, 2);
+    assert.equal(claim.events.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("worker ingest job retries version 2 attempts that arrive before the claim advance is recorded", async () => {
+  const { organizationId, claimId, inboundMessageId, cleanup } = await createClaimFixture("ERROR");
+  let extractionCalls = 0;
+
+  try {
+    await assert.rejects(
+      () =>
+        processClaimIngestJob(
+          prisma,
+          TEST_CONFIG,
+          buildQueueMessage({
+            version: 2,
+            processingAttempt: 1,
+            organizationId,
+            claimId,
+            inboundMessageId,
+          }),
+          {
+            extractClaimDataFn: async () => {
+              extractionCalls += 1;
+              return buildExtractionResult();
+            },
+          },
+        ),
+      (error: unknown) => {
+        assert.equal((error as Error & { retryable?: unknown }).retryable, true);
+        assert.match(String((error as Error).message), /not ready for processing attempt 1/);
+        return true;
+      },
+    );
+
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        processingAttempt: true,
+        events: {
+          where: { eventType: "STATUS_TRANSITION" },
+          select: { id: true },
+        },
+      },
+    });
+
+    assert.equal(extractionCalls, 0);
+    assert.equal(claim.status, "ERROR");
+    assert.equal(claim.processingAttempt, 0);
+    assert.equal(claim.events.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("worker ingest job ignores version 3 messages when the lease is already claimed", async () => {
+  const { organizationId, claimId, inboundMessageId, cleanup } = await createClaimFixture(
+    "PROCESSING",
+    {
+      processingAttempt: 3,
+      processingLeaseToken: "lease-current",
+      processingLeaseClaimedAt: new Date("2026-03-07T12:00:00.000Z"),
+    },
+  );
+  let extractionCalls = 0;
+
+  try {
+    await processClaimIngestJob(
+      prisma,
+      TEST_CONFIG,
+      buildQueueMessage({
+        version: 3,
+        processingAttempt: 3,
+        processingLeaseToken: "lease-current",
+        organizationId,
+        claimId,
+        inboundMessageId,
+      }),
+      {
+        extractClaimDataFn: async () => {
+          extractionCalls += 1;
+          return buildExtractionResult();
+        },
+        persistClaimExtractionOutcomeFn: async () => {
+          throw new Error("claimed leases should not run extraction twice");
+        },
+      },
+    );
+
+    const claim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        processingAttempt: true,
+        processingLeaseToken: true,
+        processingLeaseClaimedAt: true,
+        events: {
+          where: { eventType: "STATUS_TRANSITION" },
+          select: { id: true },
+        },
+      },
+    });
+
+    assert.equal(extractionCalls, 0);
+    assert.equal(claim.status, "PROCESSING");
+    assert.equal(claim.processingAttempt, 3);
+    assert.equal(claim.processingLeaseToken, "lease-current");
+    assert.equal(claim.processingLeaseClaimedAt?.toISOString(), "2026-03-07T12:00:00.000Z");
+    assert.equal(claim.events.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("worker ingest job transitions NEW claims into PROCESSING before extraction", async () => {
   const { organizationId, claimId, inboundMessageId, providerMessageId, cleanup } = await createClaimFixture("NEW");
   let extractionCalls = 0;
@@ -540,14 +703,42 @@ function readPayloadRecord(value: unknown): Record<string, unknown> {
 }
 
 function buildQueueMessage(overrides: Partial<ClaimIngestQueueMessage>): ClaimIngestQueueMessage {
+  if (
+    overrides.version === 3 ||
+    (typeof overrides.processingAttempt === "number" &&
+      typeof overrides.processingLeaseToken === "string")
+  ) {
+    return {
+      version: 3,
+      claimId: overrides.claimId ?? "claim-default",
+      organizationId: overrides.organizationId ?? "org-default",
+      inboundMessageId: overrides.inboundMessageId ?? "inbound-default",
+      providerMessageId: overrides.providerMessageId ?? "provider-default",
+      enqueuedAt: overrides.enqueuedAt ?? "2026-03-05T12:00:00.000Z",
+      processingAttempt: overrides.processingAttempt ?? 1,
+      processingLeaseToken: overrides.processingLeaseToken ?? "lease-default",
+    };
+  }
+
+  if (overrides.version === 2 || typeof overrides.processingAttempt === "number") {
+    return {
+      version: 2,
+      claimId: overrides.claimId ?? "claim-default",
+      organizationId: overrides.organizationId ?? "org-default",
+      inboundMessageId: overrides.inboundMessageId ?? "inbound-default",
+      providerMessageId: overrides.providerMessageId ?? "provider-default",
+      enqueuedAt: overrides.enqueuedAt ?? "2026-03-05T12:00:00.000Z",
+      processingAttempt: overrides.processingAttempt ?? 1,
+    };
+  }
+
   return {
     version: 1,
-    claimId: "claim-default",
-    organizationId: "org-default",
-    inboundMessageId: "inbound-default",
-    providerMessageId: "provider-default",
-    enqueuedAt: "2026-03-05T12:00:00.000Z",
-    ...overrides,
+    claimId: overrides.claimId ?? "claim-default",
+    organizationId: overrides.organizationId ?? "org-default",
+    inboundMessageId: overrides.inboundMessageId ?? "inbound-default",
+    providerMessageId: overrides.providerMessageId ?? "provider-default",
+    enqueuedAt: overrides.enqueuedAt ?? "2026-03-05T12:00:00.000Z",
   };
 }
 
@@ -586,6 +777,9 @@ async function createClaimFixture(
     subject?: string | null;
     textBody?: string | null;
     strippedTextReply?: string | null;
+    processingAttempt?: number;
+    processingLeaseToken?: string | null;
+    processingLeaseClaimedAt?: Date | null;
   } = {},
 ) {
   const suffix = randomUUID();
@@ -605,6 +799,9 @@ async function createClaimFixture(
       externalClaimId: `claim-${suffix}`,
       sourceEmail: `worker-${suffix}@example.com`,
       status,
+      processingAttempt: options.processingAttempt ?? 0,
+      processingLeaseToken: options.processingLeaseToken ?? null,
+      processingLeaseClaimedAt: options.processingLeaseClaimedAt ?? null,
       issueSummary: "Worker ingest job fixture",
     },
     select: {

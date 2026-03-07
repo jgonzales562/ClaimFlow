@@ -1,4 +1,5 @@
 import type { WarrantyStatus } from "@prisma/client";
+import { recoverStaleProcessingClaim as recoverStaleProcessingClaimService } from "./processing-recovery";
 import {
   transitionDashboardClaimStatus,
   updateClaimReview,
@@ -22,6 +23,7 @@ type DashboardClaimActionDependencies = {
   updateClaimReviewFn?: typeof updateClaimReview;
   transitionDashboardClaimStatusFn?: typeof transitionDashboardClaimStatus;
   retryErroredClaimFn?: typeof retryErroredClaimService;
+  recoverStaleProcessingClaimFn?: typeof recoverStaleProcessingClaimService;
 };
 
 export function createDashboardClaimActionHandlers(
@@ -30,11 +32,14 @@ export function createDashboardClaimActionHandlers(
   updateClaimReviewAction: (formData: FormData) => Promise<void>;
   transitionClaimStatusAction: (formData: FormData) => Promise<void>;
   retryClaimAction: (formData: FormData) => Promise<void>;
+  recoverProcessingAction: (formData: FormData) => Promise<void>;
 } {
   const updateClaimReviewFn = dependencies.updateClaimReviewFn ?? updateClaimReview;
   const transitionDashboardClaimStatusFn =
     dependencies.transitionDashboardClaimStatusFn ?? transitionDashboardClaimStatus;
   const retryErroredClaimFn = dependencies.retryErroredClaimFn ?? retryErroredClaimService;
+  const recoverStaleProcessingClaimFn =
+    dependencies.recoverStaleProcessingClaimFn ?? recoverStaleProcessingClaimService;
 
   async function requireAnalystAuth(claimId: string): Promise<DashboardClaimActionAuthContext> {
     const redirectTo = `/dashboard/claims/${claimId}`;
@@ -165,10 +170,57 @@ export function createDashboardClaimActionHandlers(
     dependencies.redirectFn(appendRedirectState(returnTo, "notice", "claim_retry_started"));
   }
 
+  async function recoverProcessingAction(formData: FormData): Promise<void> {
+    const claimId = readRequiredString(formData.get("claimId"));
+    const auth = await requireAnalystAuth(claimId);
+    const returnTo = parseReturnTo(formData.get("returnTo"), `/dashboard/claims/${claimId}`);
+
+    const result = await recoverStaleProcessingClaimFn({
+      organizationId: auth.organizationId,
+      actorUserId: auth.userId,
+      claimId,
+    });
+
+    if (result.kind === "claim_not_found") {
+      dependencies.redirectFn("/dashboard?error=claim_not_found");
+    }
+
+    if (result.kind === "recovery_not_allowed") {
+      dependencies.redirectFn(
+        appendRedirectState(returnTo, "error", "claim_processing_recovery_not_allowed"),
+      );
+    }
+
+    if (result.kind === "recovery_unavailable") {
+      dependencies.redirectFn(
+        appendRedirectState(returnTo, "error", "claim_processing_recovery_unavailable"),
+      );
+    }
+
+    if (result.kind === "queue_not_configured") {
+      dependencies.redirectFn(
+        appendRedirectState(returnTo, "error", "claim_processing_recovery_not_configured"),
+      );
+    }
+
+    if (result.kind === "enqueue_failed") {
+      dependencies.redirectFn(
+        appendRedirectState(returnTo, "error", "claim_processing_recovery_failed"),
+      );
+    }
+
+    dependencies.revalidatePathFn("/dashboard");
+    dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
+    dependencies.redirectFn(
+      appendRedirectState(returnTo, "notice", "claim_processing_recovery_started"),
+    );
+  }
+
   return {
     updateClaimReviewAction,
     transitionClaimStatusAction,
     retryClaimAction,
+    recoverProcessingAction,
   };
 }
 

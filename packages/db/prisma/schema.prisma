@@ -105,6 +105,9 @@ model Claim {
   warrantyStatus  WarrantyStatus    @default(UNCLEAR)
   missingInfo     String[]          @default([])
   status          ClaimStatus       @default(NEW)
+  processingAttempt Int             @default(0)
+  processingLeaseToken String?
+  processingLeaseClaimedAt DateTime?
   createdByUserId String?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt

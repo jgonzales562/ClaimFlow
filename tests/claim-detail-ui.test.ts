@@ -12,10 +12,22 @@ import {
 
 test("claim detail notice and error mappings return expected user-facing messages", () => {
   assert.equal(mapClaimDetailNotice("claim_updated"), "Claim updates saved.");
+  assert.equal(
+    mapClaimDetailNotice("claim_processing_recovery_started"),
+    "Processing recovery queued. The worker will retry this claim.",
+  );
   assert.equal(mapClaimDetailNotice("claim_retry_started"), "Claim retry queued. Processing has resumed.");
   assert.equal(mapClaimDetailNotice("status_unchanged"), "Status was already set to that value.");
   assert.equal(mapClaimDetailNotice("unknown"), null);
 
+  assert.equal(
+    mapClaimDetailError("claim_processing_recovery_not_allowed"),
+    "This claim is not eligible for processing recovery.",
+  );
+  assert.equal(
+    mapClaimDetailError("claim_processing_recovery_not_configured"),
+    "Claim processing recovery queue is not configured for this environment.",
+  );
   assert.equal(
     mapClaimDetailError("claim_retry_not_allowed"),
     "This claim cannot be retried from the dashboard.",
@@ -47,6 +59,12 @@ test("claim detail review signal picks the expected operational posture", () => 
     tone: "success",
   });
 
+  assert.deepEqual(getClaimReviewSignal("PROCESSING", 0, true), {
+    badge: "Stalled",
+    title: "Recover stalled intake",
+    copy: "This claim has stayed in processing longer than expected and may need a manual recovery attempt.",
+    tone: "warning",
+  });
   assert.equal(getClaimReviewSignal("PROCESSING", 1).tone, "warning");
   assert.equal(getClaimReviewSignal("NEW", 0).tone, "info");
 });
@@ -66,6 +84,22 @@ test("claim detail event helpers format extraction and audit payloads safely", (
       source: "manual_review",
     }),
     "Review Required to Ready (manual_review)",
+  );
+  assert.equal(
+    describeClaimEvent("STATUS_TRANSITION", {
+      fromStatus: "PROCESSING",
+      toStatus: "PROCESSING",
+      source: "manual_processing_recovery",
+    }),
+    "Processing recovery queued",
+  );
+  assert.equal(
+    describeClaimEvent("STATUS_TRANSITION", {
+      fromStatus: "PROCESSING",
+      toStatus: "PROCESSING",
+      source: "watchdog_processing_recovery",
+    }),
+    "Automatic processing recovery queued",
   );
   assert.equal(
     describeClaimEvent("MANUAL_EDIT", {

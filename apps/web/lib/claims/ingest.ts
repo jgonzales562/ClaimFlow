@@ -1,4 +1,5 @@
-import { prisma, transitionClaimStatusIfCurrent } from "@claimflow/db";
+import { prisma, startClaimProcessingAttemptIfCurrent } from "@claimflow/db";
+import { randomUUID } from "node:crypto";
 
 type ClaimIngestEnqueueInput = {
   organizationId: string;
@@ -10,6 +11,8 @@ type ClaimIngestEnqueueInput = {
 
 type ClaimQueueEnqueueInput = Omit<ClaimIngestEnqueueInput, "shouldEnqueue" | "claimId"> & {
   claimId: string;
+  processingAttempt?: number;
+  processingLeaseToken?: string;
 };
 
 type ClaimQueueEnqueueFn = (
@@ -32,6 +35,7 @@ type ClaimQueueEnqueueResult =
 type ClaimIngestEnqueueDependencies = {
   prismaClient?: typeof prisma;
   enqueueClaimIngestJobFn?: ClaimQueueEnqueueFn;
+  createProcessingLeaseTokenFn?: () => string;
 };
 
 export async function maybeEnqueueClaimForProcessing(
@@ -45,29 +49,51 @@ export async function maybeEnqueueClaimForProcessing(
   const prismaClient = dependencies.prismaClient ?? prisma;
   const enqueueClaimIngestJobFn =
     dependencies.enqueueClaimIngestJobFn ?? defaultEnqueueClaimIngestJob;
+  const createProcessingLeaseTokenFn =
+    dependencies.createProcessingLeaseTokenFn ?? defaultCreateProcessingLeaseToken;
   const claimId = input.claimId;
+  const claim = await prismaClient.claim.findFirst({
+    where: {
+      id: claimId,
+      organizationId: input.organizationId,
+    },
+    select: {
+      status: true,
+      processingAttempt: true,
+    },
+  });
+
+  if (!claim) {
+    return null;
+  }
+
+  const nextProcessingAttempt =
+    claim.status === "NEW" ? claim.processingAttempt + 1 : undefined;
+  const processingLeaseToken =
+    typeof nextProcessingAttempt === "number" ? createProcessingLeaseTokenFn() : undefined;
 
   const queueResult = await enqueueClaimIngestJobFn({
     claimId,
     organizationId: input.organizationId,
     inboundMessageId: input.inboundMessageId,
     providerMessageId: input.providerMessageId,
+    processingAttempt: nextProcessingAttempt,
+    processingLeaseToken,
   });
 
-  if (queueResult.enqueued) {
+  if (queueResult.enqueued && claim.status === "NEW") {
     await prismaClient.$transaction(async (tx) => {
-      await transitionClaimStatusIfCurrent({
+      await startClaimProcessingAttemptIfCurrent({
         tx,
         organizationId: input.organizationId,
         claimId,
+        expectedProcessingAttempt: claim.processingAttempt,
+        processingLeaseToken: processingLeaseToken ?? queueResult.messageId,
         fromStatus: "NEW",
-        toStatus: "PROCESSING",
-        payload: {
-          source: "webhook_enqueue",
-          inboundMessageId: input.inboundMessageId,
-          providerMessageId: input.providerMessageId,
-          queueMessageId: queueResult.messageId,
-        },
+        source: "webhook_enqueue",
+        queueMessageId: queueResult.messageId,
+        inboundMessageId: input.inboundMessageId,
+        providerMessageId: input.providerMessageId,
       });
     });
   }
@@ -80,4 +106,8 @@ async function defaultEnqueueClaimIngestJob(
 ): Promise<ClaimQueueEnqueueResult> {
   const { enqueueClaimIngestJob } = await import("../queue/claims");
   return enqueueClaimIngestJob(input);
+}
+
+function defaultCreateProcessingLeaseToken(): string {
+  return randomUUID();
 }

@@ -124,6 +124,19 @@ async function main(): Promise<void> {
       missingInfo: ["purchase_invoice"],
       status: ClaimStatus.ERROR,
     },
+    {
+      externalClaimId: "seed-claim-007",
+      sourceEmail: "claims@dealer.example",
+      customerName: "Jamie Flores",
+      productName: "Acme ControlHub C8",
+      serialNumber: "ACCH8-2120",
+      purchaseDate: new Date("2025-01-08T00:00:00.000Z"),
+      issueSummary: "Claim has remained in intake processing longer than expected and should surface recovery controls.",
+      retailer: "Metro Climate Parts",
+      warrantyStatus: WarrantyStatus.UNCLEAR,
+      missingInfo: ["installer_notes"],
+      status: ClaimStatus.PROCESSING,
+    },
   ] as const;
 
   const seededClaimsByExternalId = new Map<string, { id: string }>();
@@ -155,6 +168,11 @@ async function main(): Promise<void> {
   const seededRetryableErrorClaim = seededClaimsByExternalId.get("seed-claim-006");
   if (!seededRetryableErrorClaim) {
     throw new Error("Expected seeded retryable error claim to exist.");
+  }
+
+  const seededStaleProcessingClaim = seededClaimsByExternalId.get("seed-claim-007");
+  if (!seededStaleProcessingClaim) {
+    throw new Error("Expected seeded stale processing claim to exist.");
   }
 
   const existingWorkerFailureEvent = await prisma.claimEvent.findFirst({
@@ -281,6 +299,41 @@ async function main(): Promise<void> {
       claimId: seededRetryableErrorClaim.id,
     },
   });
+
+  await prisma.inboundMessage.upsert({
+    where: {
+      organizationId_provider_providerMessageId: {
+        organizationId: organization.id,
+        provider: "POSTMARK",
+        providerMessageId: "seed-provider-message-007",
+      },
+    },
+    update: {
+      claimId: seededStaleProcessingClaim.id,
+      fromEmail: "dealer@example.com",
+      toEmail: "claims+acme@inbound.claimflow.dev",
+      subject: "Stale processing seeded claim",
+      textBody: "This seeded claim is intentionally left in PROCESSING for recovery controls.",
+      rawPayload: { seeded: true, externalClaimId: "seed-claim-007" },
+    },
+    create: {
+      organizationId: organization.id,
+      provider: "POSTMARK",
+      providerMessageId: "seed-provider-message-007",
+      fromEmail: "dealer@example.com",
+      toEmail: "claims+acme@inbound.claimflow.dev",
+      subject: "Stale processing seeded claim",
+      textBody: "This seeded claim is intentionally left in PROCESSING for recovery controls.",
+      rawPayload: { seeded: true, externalClaimId: "seed-claim-007" },
+      claimId: seededStaleProcessingClaim.id,
+    },
+  });
+
+  await prisma.$executeRaw`
+    UPDATE "Claim"
+    SET "updatedAt" = ${new Date("2026-01-01T12:00:00.000Z")}
+    WHERE "id" = ${seededStaleProcessingClaim.id}
+  `;
 
   const seededAttachmentClaim = seededClaimsByExternalId.get("seed-claim-005");
   if (!seededAttachmentClaim) {

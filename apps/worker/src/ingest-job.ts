@@ -60,6 +60,9 @@ export async function processClaimIngestJob(
           id: true,
           organizationId: true,
           status: true,
+          processingAttempt: true,
+          processingLeaseToken: true,
+          processingLeaseClaimedAt: true,
           customerName: true,
           productName: true,
           serialNumber: true,
@@ -105,7 +108,56 @@ export async function processClaimIngestJob(
     return;
   }
 
-  if (claim.status !== "PROCESSING") {
+  if (message.version === 2) {
+    if (claim.processingAttempt > message.processingAttempt) {
+      return;
+    }
+
+    if (claim.processingAttempt < message.processingAttempt) {
+      throw new WorkerMessageError(
+        `Claim "${claim.id}" is not ready for processing attempt ${message.processingAttempt}.`,
+        true,
+      );
+    }
+
+    if (claim.status !== "PROCESSING") {
+      return;
+    }
+  } else if (message.version === 3) {
+    if (claim.processingAttempt > message.processingAttempt) {
+      return;
+    }
+
+    if (claim.processingAttempt < message.processingAttempt) {
+      throw new WorkerMessageError(
+        `Claim "${claim.id}" is not ready for processing attempt ${message.processingAttempt}.`,
+        true,
+      );
+    }
+
+    if (claim.status !== "PROCESSING") {
+      return;
+    }
+
+    if (claim.processingLeaseToken !== message.processingLeaseToken) {
+      return;
+    }
+
+    if (claim.processingLeaseClaimedAt) {
+      return;
+    }
+
+    const leaseClaimed = await claimProcessingLeaseClaimedByWorker(prismaClient, {
+      claimId: claim.id,
+      organizationId: claim.organizationId,
+      processingAttempt: message.processingAttempt,
+      processingLeaseToken: message.processingLeaseToken,
+    });
+
+    if (!leaseClaimed) {
+      return;
+    }
+  } else if (claim.status !== "PROCESSING") {
     await prismaClient.$transaction(async (tx) => {
       await transitionClaimStatusIfCurrent({
         tx,
@@ -238,7 +290,35 @@ export async function processClaimIngestJob(
     textractMetadata,
     inboundTextChars,
     extractionReadyConfidence: config.extractionReadyConfidence,
+    processingAttempt: message.version === 1 ? undefined : message.processingAttempt,
+    processingLeaseToken: message.version === 3 ? message.processingLeaseToken : undefined,
   });
+}
+
+async function claimProcessingLeaseClaimedByWorker(
+  prismaClient: PrismaClient,
+  input: {
+    claimId: string;
+    organizationId: string;
+    processingAttempt: number;
+    processingLeaseToken: string;
+  },
+): Promise<boolean> {
+  const claimed = await prismaClient.claim.updateMany({
+    where: {
+      id: input.claimId,
+      organizationId: input.organizationId,
+      status: "PROCESSING",
+      processingAttempt: input.processingAttempt,
+      processingLeaseToken: input.processingLeaseToken,
+      processingLeaseClaimedAt: null,
+    },
+    data: {
+      processingLeaseClaimedAt: new Date(),
+    },
+  });
+
+  return claimed.count === 1;
 }
 
 function shouldRunTextractFallback(input: {

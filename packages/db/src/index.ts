@@ -1,4 +1,8 @@
 import { PrismaClient } from "@prisma/client";
+export {
+  recordProcessingRecoveryIfStale,
+  startClaimProcessingAttemptIfCurrent,
+} from "./claim-processing.js";
 export { recordClaimStatusTransition, transitionClaimStatusIfCurrent } from "./claim-status.js";
 
 const prismaGlobal = globalThis as unknown as {

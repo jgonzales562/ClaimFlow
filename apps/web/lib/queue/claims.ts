@@ -2,12 +2,14 @@ import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import { extractErrorMessage } from "@/lib/observability/log";
 
 type ClaimIngestQueueMessage = {
-  version: 1;
+  version: 1 | 2 | 3;
   claimId: string;
   organizationId: string;
   inboundMessageId: string;
   providerMessageId: string;
   enqueuedAt: string;
+  processingAttempt?: number;
+  processingLeaseToken?: string;
 };
 
 type ClaimQueueEnqueueInput = Omit<ClaimIngestQueueMessage, "version" | "enqueuedAt"> & {
@@ -42,7 +44,15 @@ export async function enqueueClaimIngestJob(
   }
 
   const message: ClaimIngestQueueMessage = {
-    version: 1,
+    version:
+      typeof messageInput.processingAttempt === "number" &&
+      Number.isInteger(messageInput.processingAttempt) &&
+      messageInput.processingAttempt > 0
+        ? typeof messageInput.processingLeaseToken === "string" &&
+          messageInput.processingLeaseToken.trim().length > 0
+          ? 3
+          : 2
+        : 1,
     ...messageInput,
     enqueuedAt: new Date().toISOString(),
   };

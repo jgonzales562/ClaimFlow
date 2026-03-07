@@ -213,6 +213,30 @@ test.describe("admin claim operator flows", () => {
       page.getByText("The latest worker failure is marked retryable"),
     ).toBeVisible();
   });
+
+  test("admin can see recovery controls for stale processing claims", async ({ page }) => {
+    test.setTimeout(90_000);
+
+    await page.getByLabel("Search").fill("seed-claim-007");
+    await Promise.all([
+      page.waitForURL(
+        (url) => url.pathname === "/dashboard" && url.searchParams.get("search") === "seed-claim-007",
+      ),
+      page.getByRole("button", { name: "Apply filters" }).click(),
+    ]);
+
+    const claimLink = page.getByRole("link", { name: "seed-claim-007" });
+    await expect(claimLink).toBeVisible();
+    await expect(page.getByText("Recovery available")).toBeVisible();
+
+    await claimLink.click();
+    await expect(page).toHaveURL(/\/dashboard\/claims\/.+/, { timeout: 30_000 });
+    await expect(page.getByText("Recover stalled intake")).toBeVisible();
+    await expect(page.getByRole("button", { name: "Recover processing" })).toBeVisible();
+    await expect(
+      page.getByText("This claim has been processing longer than expected."),
+    ).toBeVisible();
+  });
 });
 
 async function signInAsAdmin(page: Page): Promise<void> {

@@ -29,6 +29,12 @@ type QueueMessageHandlerConfig = {
 type QueueMessageHandlerDependencies<TConfig extends QueueMessageHandlerConfig> = {
   processClaimIngestJobFn: (config: TConfig, queueMessage: ClaimIngestQueueMessage) => Promise<void>;
   markClaimAsErrorFn: (input: MarkClaimAsErrorInput) => Promise<void>;
+  releaseClaimProcessingLeaseFn?: (input: {
+    claimId: string;
+    organizationId: string;
+    processingAttempt?: number;
+    processingLeaseToken?: string;
+  }) => Promise<void>;
   captureExceptionFn?: (
     error: unknown,
     context: Record<string, string | number | boolean | null | undefined>,
@@ -73,6 +79,7 @@ export async function handleClaimQueueMessage<TConfig extends QueueMessageHandle
         captureExceptionFn: dependencies.captureExceptionFn,
         logErrorFn: dependencies.logErrorFn,
         markClaimAsErrorFn: dependencies.markClaimAsErrorFn,
+        releaseClaimProcessingLeaseFn: dependencies.releaseClaimProcessingLeaseFn,
       },
     );
     return;
@@ -108,6 +115,7 @@ export async function handleClaimQueueMessage<TConfig extends QueueMessageHandle
         captureExceptionFn: dependencies.captureExceptionFn,
         logErrorFn: dependencies.logErrorFn,
         markClaimAsErrorFn: dependencies.markClaimAsErrorFn,
+        releaseClaimProcessingLeaseFn: dependencies.releaseClaimProcessingLeaseFn,
       },
     );
   }
@@ -170,7 +178,11 @@ function isClaimIngestQueueMessage(value: unknown): value is ClaimIngestQueueMes
 
   const record = value as Record<string, unknown>;
   return (
-    record.version === 1 &&
+    (record.version === 1 ||
+      (record.version === 2 && hasPositiveInteger(record.processingAttempt)) ||
+      (record.version === 3 &&
+        hasPositiveInteger(record.processingAttempt) &&
+        hasNonEmptyString(record.processingLeaseToken))) &&
     hasNonEmptyString(record.claimId) &&
     hasNonEmptyString(record.organizationId) &&
     hasNonEmptyString(record.inboundMessageId) &&
@@ -181,4 +193,8 @@ function isClaimIngestQueueMessage(value: unknown): value is ClaimIngestQueueMes
 
 function hasNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
+}
+
+function hasPositiveInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0;
 }

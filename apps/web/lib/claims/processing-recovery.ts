@@ -1,35 +1,40 @@
-import { prisma, startClaimProcessingAttemptIfCurrent } from "@claimflow/db";
+import { prisma, recordProcessingRecoveryIfStale } from "@claimflow/db";
 import { randomUUID } from "node:crypto";
 import { enqueueClaimIngestJob } from "@/lib/queue/claims";
-import { parseWorkerFailureEvent } from "./worker-failure";
+import { getClaimProcessingStaleBefore, getClaimProcessingStaleMinutes } from "./processing-health";
 
-const MANUAL_RETRY_DELAY_SECONDS = 2;
+const MANUAL_PROCESSING_RECOVERY_DELAY_SECONDS = 2;
 
-type RetryErroredClaimDependencies = {
+type RecoverStaleProcessingClaimDependencies = {
   prismaClient?: typeof prisma;
   enqueueClaimIngestJobFn?: typeof enqueueClaimIngestJob;
   createProcessingLeaseTokenFn?: () => string;
+  nowFn?: () => Date;
+  staleMinutes?: number;
 };
 
-export async function retryErroredClaim(
+export async function recoverStaleProcessingClaim(
   input: {
     organizationId: string;
     actorUserId: string;
     claimId: string;
   },
-  dependencies: RetryErroredClaimDependencies = {},
+  dependencies: RecoverStaleProcessingClaimDependencies = {},
 ): Promise<
   | { kind: "claim_not_found" }
-  | { kind: "retry_not_allowed" }
-  | { kind: "retry_unavailable" }
+  | { kind: "recovery_not_allowed" }
+  | { kind: "recovery_unavailable" }
   | { kind: "queue_not_configured" }
   | { kind: "enqueue_failed" }
-  | { kind: "retried"; claimId: string }
+  | { kind: "recovered"; claimId: string }
 > {
   const prismaClient = dependencies.prismaClient ?? prisma;
   const enqueueClaimIngestJobFn = dependencies.enqueueClaimIngestJobFn ?? enqueueClaimIngestJob;
   const createProcessingLeaseTokenFn =
     dependencies.createProcessingLeaseTokenFn ?? defaultCreateProcessingLeaseToken;
+  const now = (dependencies.nowFn ?? (() => new Date()))();
+  const staleMinutes = dependencies.staleMinutes ?? getClaimProcessingStaleMinutes();
+  const staleBefore = getClaimProcessingStaleBefore(now, staleMinutes);
 
   const claim = await prismaClient.claim.findFirst({
     where: {
@@ -39,6 +44,7 @@ export async function retryErroredClaim(
     select: {
       id: true,
       status: true,
+      updatedAt: true,
       processingAttempt: true,
       inboundMessages: {
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -48,21 +54,6 @@ export async function retryErroredClaim(
           providerMessageId: true,
         },
       },
-      events: {
-        where: {
-          eventType: "STATUS_TRANSITION",
-          payload: {
-            path: ["source"],
-            equals: "worker_failure",
-          },
-        },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 1,
-        select: {
-          createdAt: true,
-          payload: true,
-        },
-      },
     },
   });
 
@@ -70,22 +61,13 @@ export async function retryErroredClaim(
     return { kind: "claim_not_found" };
   }
 
-  if (claim.status !== "ERROR") {
-    return { kind: "retry_not_allowed" };
-  }
-
-  const latestFailureEvent = claim.events[0];
-  const latestFailure = latestFailureEvent
-    ? parseWorkerFailureEvent(latestFailureEvent.payload, latestFailureEvent.createdAt)
-    : null;
-
-  if (!latestFailure || latestFailure.retryable !== true) {
-    return { kind: "retry_not_allowed" };
+  if (claim.status !== "PROCESSING" || claim.updatedAt.getTime() > staleBefore.getTime()) {
+    return { kind: "recovery_not_allowed" };
   }
 
   const latestInboundMessage = claim.inboundMessages[0];
   if (!latestInboundMessage) {
-    return { kind: "retry_unavailable" };
+    return { kind: "recovery_unavailable" };
   }
 
   const nextProcessingAttempt = claim.processingAttempt + 1;
@@ -98,7 +80,7 @@ export async function retryErroredClaim(
     providerMessageId: latestInboundMessage.providerMessageId,
     processingAttempt: nextProcessingAttempt,
     processingLeaseToken,
-    delaySeconds: MANUAL_RETRY_DELAY_SECONDS,
+    delaySeconds: MANUAL_PROCESSING_RECOVERY_DELAY_SECONDS,
   });
 
   if (!queueResult.enqueued) {
@@ -107,51 +89,54 @@ export async function retryErroredClaim(
       : { kind: "enqueue_failed" };
   }
 
-  const transitioned = await prismaClient.$transaction((tx) =>
-    startClaimProcessingAttemptIfCurrent({
+  const recovered = await prismaClient.$transaction(async (tx) => {
+    return recordProcessingRecoveryIfStale({
       tx,
       organizationId: input.organizationId,
       claimId: claim.id,
       actorUserId: input.actorUserId,
-      expectedProcessingAttempt: claim.processingAttempt,
-      processingLeaseToken,
-      fromStatus: "ERROR",
-      source: "manual_retry",
+      source: "manual_processing_recovery",
+      staleBefore,
+      touchedAt: now,
       queueMessageId: queueResult.messageId,
       inboundMessageId: latestInboundMessage.id,
       providerMessageId: latestInboundMessage.providerMessageId,
-    }),
-  );
-
-  if (transitioned) {
-    return {
-      kind: "retried",
-      claimId: claim.id,
-    };
-  }
-
-  const currentClaim = await prismaClient.claim.findFirst({
-    where: {
-      id: claim.id,
-      organizationId: input.organizationId,
-    },
-    select: {
-      status: true,
-      processingAttempt: true,
-    },
+      expectedProcessingAttempt: claim.processingAttempt,
+      processingLeaseToken,
+      staleMinutes,
+      previousUpdatedAt: claim.updatedAt.toISOString(),
+    });
   });
 
-  if (
-    currentClaim?.status === "PROCESSING" &&
-    currentClaim.processingAttempt >= nextProcessingAttempt
-  ) {
-    return {
-      kind: "retried",
-      claimId: claim.id,
-    };
+  if (recovered === null) {
+    const currentClaim = await prismaClient.claim.findFirst({
+      where: {
+        id: claim.id,
+        organizationId: input.organizationId,
+      },
+      select: {
+        status: true,
+        processingAttempt: true,
+      },
+    });
+
+    if (
+      currentClaim?.status === "PROCESSING" &&
+      currentClaim.processingAttempt >= nextProcessingAttempt
+    ) {
+      return {
+        kind: "recovered",
+        claimId: claim.id,
+      };
+    }
+
+    return { kind: "recovery_not_allowed" };
   }
 
-  return { kind: "retry_not_allowed" };
+  return {
+    kind: "recovered",
+    claimId: claim.id,
+  };
 }
 
 function defaultCreateProcessingLeaseToken(): string {

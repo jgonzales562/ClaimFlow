@@ -15,3 +15,4 @@ const dashboardClaimActionHandlers = createDashboardClaimActionHandlers({
 export const updateClaimReviewAction = dashboardClaimActionHandlers.updateClaimReviewAction;
 export const transitionClaimStatusAction = dashboardClaimActionHandlers.transitionClaimStatusAction;
 export const retryClaimAction = dashboardClaimActionHandlers.retryClaimAction;
+export const recoverProcessingAction = dashboardClaimActionHandlers.recoverProcessingAction;

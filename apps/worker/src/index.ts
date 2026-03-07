@@ -1,4 +1,4 @@
-import { markClaimAsError } from "./claim-state.js";
+import { markClaimAsError, releaseClaimProcessingLease } from "./claim-state.js";
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { processClaimIngestJob } from "./ingest-job.js";
 import {
@@ -8,6 +8,7 @@ import {
   logError,
   logInfo,
 } from "./observability.js";
+import { recoverStaleProcessingClaims } from "./processing-watchdog.js";
 import { handleClaimQueueMessage } from "./queue-handler.js";
 import {
   ReceiveMessageCommand,
@@ -59,6 +60,7 @@ async function bootstrap(): Promise<void> {
 
 async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promise<void> {
   let shuttingDown = false;
+  let nextWatchdogRunAt = 0;
 
   const handleSignal = (signal: NodeJS.Signals): void => {
     if (shuttingDown) {
@@ -74,6 +76,10 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
   logInfo("worker_started", {
     queueUrl: config.queueUrl,
     dlqUrl: config.dlqUrl,
+    processingStaleMinutes: config.processingStaleMinutes,
+    processingWatchdogEnabled: config.processingWatchdogEnabled,
+    processingWatchdogIntervalMs: config.processingWatchdogIntervalMs,
+    processingWatchdogBatchSize: config.processingWatchdogBatchSize,
     pollWaitSeconds: config.pollWaitSeconds,
     maxMessages: config.maxMessages,
     processingConcurrency: config.processingConcurrency,
@@ -86,6 +92,32 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
   });
 
   while (!shuttingDown) {
+    if (config.processingWatchdogEnabled && Date.now() >= nextWatchdogRunAt) {
+      nextWatchdogRunAt = Date.now() + config.processingWatchdogIntervalMs;
+
+      try {
+        await recoverStaleProcessingClaims(
+          {
+            prismaClient: prisma,
+            sqsClient,
+            config,
+          },
+          {
+            logInfoFn: logInfo,
+            logErrorFn: logError,
+          },
+        );
+      } catch (error: unknown) {
+        captureWorkerException(error, {
+          stage: "processing_watchdog",
+          queueUrl: config.queueUrl,
+        });
+        logError("processing_watchdog_failed", {
+          error: extractErrorMessage(error),
+        });
+      }
+    }
+
     let messages: Message[];
 
     try {
@@ -161,6 +193,9 @@ async function handleQueueMessage(
       logErrorFn: logError,
       markClaimAsErrorFn: async (failureInput) => {
         await markClaimAsError(prisma, failureInput);
+      },
+      releaseClaimProcessingLeaseFn: async (leaseInput) => {
+        await releaseClaimProcessingLease(prisma, leaseInput);
       },
     },
   );

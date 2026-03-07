@@ -12,6 +12,7 @@ import {
   type ClaimFilters,
   type ClaimStatus,
 } from "./filters";
+import { getClaimProcessingStaleBefore, isClaimProcessingStale } from "./processing-health";
 
 export type DashboardClaimRecord = {
   id: string;
@@ -22,6 +23,7 @@ export type DashboardClaimRecord = {
   warrantyStatus: "LIKELY_IN_WARRANTY" | "LIKELY_EXPIRED" | "UNCLEAR";
   createdAt: Date;
   updatedAt: Date;
+  isProcessingStale: boolean;
 };
 
 export type DashboardStatusCounts = Record<ClaimStatus, number>;
@@ -30,6 +32,7 @@ export type DashboardClaimsPage = {
   claims: DashboardClaimRecord[];
   totalClaims: number;
   statusCounts: DashboardStatusCounts;
+  staleProcessingCount: number;
   nextCursor: string | null;
   prevCursor: string | null;
 };
@@ -54,8 +57,9 @@ export async function listDashboardClaims(input: {
   pageSize?: number;
 }): Promise<DashboardClaimsPage> {
   const pageSize = input.pageSize ?? DEFAULT_DASHBOARD_PAGE_SIZE;
+  const staleProcessingBefore = getClaimProcessingStaleBefore();
 
-  const [claimsWindow, groupedCounts] = await Promise.all([
+  const [claimsWindow, groupedCounts, staleProcessingCount] = await Promise.all([
     prisma.claim.findMany({
       where: applyTimestampCursor(
         buildClaimWhereInput(input.organizationId, input.filters),
@@ -83,6 +87,15 @@ export async function listDashboardClaims(input: {
       },
       _count: {
         _all: true,
+      },
+    }),
+    prisma.claim.count({
+      where: {
+        organizationId: input.organizationId,
+        status: "PROCESSING",
+        updatedAt: {
+          lte: staleProcessingBefore,
+        },
       },
     }),
   ]);
@@ -121,9 +134,13 @@ export async function listDashboardClaims(input: {
     : null;
 
   return {
-    claims,
+    claims: claims.map((claim) => ({
+      ...claim,
+      isProcessingStale: isClaimProcessingStale(claim.status, claim.updatedAt),
+    })),
     totalClaims,
     statusCounts,
+    staleProcessingCount,
     nextCursor,
     prevCursor,
   };

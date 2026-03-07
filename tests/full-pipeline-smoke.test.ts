@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { createPostmarkInboundHandler } from "../apps/web/lib/postmark/inbound-webhook.ts";
 import { maybeEnqueueClaimForProcessing } from "../apps/web/lib/claims/ingest.ts";
-import { markClaimAsError } from "../apps/worker/src/claim-state.ts";
+import {
+  markClaimAsError,
+  releaseClaimProcessingLease,
+} from "../apps/worker/src/claim-state.ts";
 import type { ClaimExtractionResult } from "../apps/worker/src/extraction.ts";
 import {
   processClaimIngestJob,
@@ -56,11 +59,10 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
           maybeEnqueueClaimForProcessing(input, {
             prismaClient: prisma,
             enqueueClaimIngestJobFn: async (queueInput) => {
-              capturedQueueMessage = {
-                version: 1,
-                enqueuedAt: "2026-03-06T12:00:00.000Z",
-                ...queueInput,
-              };
+              capturedQueueMessage = buildEnqueuedQueueMessage(
+                queueInput,
+                "2026-03-06T12:00:00.000Z",
+              );
 
               return {
                 enqueued: true,
@@ -113,6 +115,9 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
         });
 
         assert.notEqual(capturedQueueMessage, null);
+        assert.equal(capturedQueueMessage?.version, 3);
+        assert.equal(capturedQueueMessage?.processingAttempt, 1);
+        assert.equal(typeof capturedQueueMessage?.processingLeaseToken, "string");
         assert.equal(capturedQueueMessage?.claimId, claimId);
         assert.equal(capturedQueueMessage?.organizationId, organization.id);
         assert.equal(capturedQueueMessage?.inboundMessageId, inboundMessageId);
@@ -158,6 +163,7 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
                 extractClaimDataFn: async () => buildReadyExtraction(),
               }),
             markClaimAsErrorFn: (input) => markClaimAsError(prisma, input),
+            releaseClaimProcessingLeaseFn: (input) => releaseClaimProcessingLease(prisma, input),
             logInfoFn: () => {},
             logErrorFn: () => {},
           },
@@ -170,6 +176,8 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
           where: { id: claimId },
           select: {
             status: true,
+            processingLeaseToken: true,
+            processingLeaseClaimedAt: true,
             customerName: true,
             productName: true,
             serialNumber: true,
@@ -198,6 +206,8 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
         });
 
         assert.equal(claim.status, "READY");
+        assert.equal(claim.processingLeaseToken, null);
+        assert.equal(claim.processingLeaseClaimedAt, null);
         assert.equal(claim.customerName, "Ada Lovelace");
         assert.equal(claim.productName, "Premium Blender");
         assert.equal(claim.serialNumber, "SN-12345");
@@ -274,11 +284,10 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
           maybeEnqueueClaimForProcessing(input, {
             prismaClient: prisma,
             enqueueClaimIngestJobFn: async (queueInput) => {
-              capturedQueueMessage = {
-                version: 1,
-                enqueuedAt: "2026-03-06T12:05:00.000Z",
-                ...queueInput,
-              };
+              capturedQueueMessage = buildEnqueuedQueueMessage(
+                queueInput,
+                "2026-03-06T12:05:00.000Z",
+              );
 
               return {
                 enqueued: true,
@@ -324,6 +333,9 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
         });
 
         assert.notEqual(capturedQueueMessage, null);
+        assert.equal(capturedQueueMessage?.version, 3);
+        assert.equal(capturedQueueMessage?.processingAttempt, 1);
+        assert.equal(typeof capturedQueueMessage?.processingLeaseToken, "string");
 
         await handleClaimQueueMessage(
           {
@@ -348,6 +360,7 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
                 },
               }),
             markClaimAsErrorFn: (input) => markClaimAsError(prisma, input),
+            releaseClaimProcessingLeaseFn: (input) => releaseClaimProcessingLease(prisma, input),
             logInfoFn: () => {},
             logErrorFn: () => {},
           },
@@ -372,6 +385,8 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
           where: { id: claimId },
           select: {
             status: true,
+            processingLeaseToken: true,
+            processingLeaseClaimedAt: true,
             events: {
               where: {
                 eventType: "STATUS_TRANSITION",
@@ -390,6 +405,8 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
         });
 
         assert.equal(claim.status, "ERROR");
+        assert.equal(claim.processingLeaseToken, null);
+        assert.equal(claim.processingLeaseClaimedAt, null);
         assert.equal(claim.extractions.length, 0);
         assert.equal(claim.events.length, 2);
         assert.deepEqual(readPayloadRecord(claim.events[0]?.payload), {
@@ -459,11 +476,10 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
           maybeEnqueueClaimForProcessing(input, {
             prismaClient: prisma,
             enqueueClaimIngestJobFn: async (queueInput) => {
-              capturedQueueMessage = {
-                version: 1,
-                enqueuedAt: "2026-03-06T12:10:00.000Z",
-                ...queueInput,
-              };
+              capturedQueueMessage = buildEnqueuedQueueMessage(
+                queueInput,
+                "2026-03-06T12:10:00.000Z",
+              );
 
               return {
                 enqueued: true,
@@ -509,6 +525,9 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
         });
 
         assert.notEqual(capturedQueueMessage, null);
+        assert.equal(capturedQueueMessage?.version, 3);
+        assert.equal(capturedQueueMessage?.processingAttempt, 1);
+        assert.equal(typeof capturedQueueMessage?.processingLeaseToken, "string");
 
         await handleClaimQueueMessage(
           {
@@ -533,6 +552,7 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
                 },
               }),
             markClaimAsErrorFn: (input) => markClaimAsError(prisma, input),
+            releaseClaimProcessingLeaseFn: (input) => releaseClaimProcessingLease(prisma, input),
             logInfoFn: () => {},
             logErrorFn: () => {},
           },
@@ -546,6 +566,8 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
           where: { id: claimId },
           select: {
             status: true,
+            processingLeaseToken: true,
+            processingLeaseClaimedAt: true,
             events: {
               where: {
                 eventType: "STATUS_TRANSITION",
@@ -564,6 +586,8 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
         });
 
         assert.equal(claim.status, "PROCESSING");
+        assert.equal(typeof claim.processingLeaseToken, "string");
+        assert.equal(claim.processingLeaseClaimedAt, null);
         assert.equal(claim.extractions.length, 0);
         assert.equal(claim.events.length, 1);
         assert.deepEqual(readPayloadRecord(claim.events[0]?.payload), {
@@ -637,6 +661,62 @@ function buildWorkerQueueConfig(
     textractMaxAttachments: 3,
     textractMaxTextChars: 12_000,
     ...overrides,
+  };
+}
+
+function buildEnqueuedQueueMessage(
+  input: {
+    claimId: string;
+    organizationId: string;
+    inboundMessageId: string;
+    providerMessageId: string;
+    processingAttempt?: number;
+    processingLeaseToken?: string;
+  },
+  enqueuedAt: string,
+): ClaimIngestQueueMessage {
+  if (
+    typeof input.processingAttempt === "number" &&
+    Number.isInteger(input.processingAttempt) &&
+    input.processingAttempt > 0 &&
+    typeof input.processingLeaseToken === "string" &&
+    input.processingLeaseToken.length > 0
+  ) {
+    return {
+      version: 3,
+      claimId: input.claimId,
+      organizationId: input.organizationId,
+      inboundMessageId: input.inboundMessageId,
+      providerMessageId: input.providerMessageId,
+      enqueuedAt,
+      processingAttempt: input.processingAttempt,
+      processingLeaseToken: input.processingLeaseToken,
+    };
+  }
+
+  if (
+    typeof input.processingAttempt === "number" &&
+    Number.isInteger(input.processingAttempt) &&
+    input.processingAttempt > 0
+  ) {
+    return {
+      version: 2,
+      claimId: input.claimId,
+      organizationId: input.organizationId,
+      inboundMessageId: input.inboundMessageId,
+      providerMessageId: input.providerMessageId,
+      enqueuedAt,
+      processingAttempt: input.processingAttempt,
+    };
+  }
+
+  return {
+    version: 1,
+    claimId: input.claimId,
+    organizationId: input.organizationId,
+    inboundMessageId: input.inboundMessageId,
+    providerMessageId: input.providerMessageId,
+    enqueuedAt,
   };
 }
 

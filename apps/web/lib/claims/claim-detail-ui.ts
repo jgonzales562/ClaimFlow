@@ -11,13 +11,26 @@ export function getClaimEventTone(eventType: string): "neutral" | "info" {
   return eventType === "STATUS_TRANSITION" ? "info" : "neutral";
 }
 
-export function getClaimReviewSignal(status: string, missingInfoCount: number): ReviewSignal {
+export function getClaimReviewSignal(
+  status: string,
+  missingInfoCount: number,
+  isProcessingStale = false,
+): ReviewSignal {
   if (status === "ERROR") {
     return {
       badge: "Blocked",
       title: "Resolve exception",
       copy: "The claim is in an error state and should be investigated before normal processing can continue.",
       tone: "danger",
+    };
+  }
+
+  if (status === "PROCESSING" && isProcessingStale) {
+    return {
+      badge: "Stalled",
+      title: "Recover stalled intake",
+      copy: "This claim has stayed in processing longer than expected and may need a manual recovery attempt.",
+      tone: "warning",
     };
   }
 
@@ -60,6 +73,8 @@ export function mapClaimDetailNotice(value: string | null): string | null {
   switch (value) {
     case "claim_updated":
       return "Claim updates saved.";
+    case "claim_processing_recovery_started":
+      return "Processing recovery queued. The worker will retry this claim.";
     case "claim_retry_started":
       return "Claim retry queued. Processing has resumed.";
     case "status_updated":
@@ -75,6 +90,14 @@ export function mapClaimDetailNotice(value: string | null): string | null {
 
 export function mapClaimDetailError(value: string | null): string | null {
   switch (value) {
+    case "claim_processing_recovery_failed":
+      return "Unable to enqueue processing recovery for this claim.";
+    case "claim_processing_recovery_not_allowed":
+      return "This claim is not eligible for processing recovery.";
+    case "claim_processing_recovery_not_configured":
+      return "Claim processing recovery queue is not configured for this environment.";
+    case "claim_processing_recovery_unavailable":
+      return "This claim does not have enough inbound message context to recover processing.";
     case "claim_retry_failed":
       return "Unable to enqueue the claim retry.";
     case "claim_retry_not_allowed":
@@ -120,6 +143,12 @@ export function describeClaimEvent(eventType: string, payload: unknown): string 
     const fromStatus = typeof record.fromStatus === "string" ? record.fromStatus : "unknown";
     const toStatus = typeof record.toStatus === "string" ? record.toStatus : "unknown";
     const source = typeof record.source === "string" ? record.source : null;
+    if (source === "manual_processing_recovery") {
+      return "Processing recovery queued";
+    }
+    if (source === "watchdog_processing_recovery") {
+      return "Automatic processing recovery queued";
+    }
     return source
       ? `${formatTokenLabel(fromStatus)} to ${formatTokenLabel(toStatus)} (${source})`
       : `${formatTokenLabel(fromStatus)} to ${formatTokenLabel(toStatus)}`;

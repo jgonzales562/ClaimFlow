@@ -4,6 +4,10 @@ export type WorkerConfig = ClaimIngestJobConfig & {
   awsRegion: string;
   queueUrl: string;
   dlqUrl: string | null;
+  processingStaleMinutes: number;
+  processingWatchdogEnabled: boolean;
+  processingWatchdogIntervalMs: number;
+  processingWatchdogBatchSize: number;
   pollWaitSeconds: number;
   visibilityTimeoutSeconds: number | undefined;
   maxMessages: number;
@@ -31,6 +35,20 @@ export function loadWorkerConfig(): WorkerConfig {
     awsRegion,
     queueUrl,
     dlqUrl: optionalEnv("CLAIMS_INGEST_DLQ_URL"),
+    processingStaleMinutes: parseIntegerEnv("CLAIMS_PROCESSING_STALE_MINUTES", 30, 1, 10_080),
+    processingWatchdogEnabled: parseBooleanEnv("CLAIMS_PROCESSING_WATCHDOG_ENABLED", false),
+    processingWatchdogIntervalMs: parseIntegerEnv(
+      "CLAIMS_PROCESSING_WATCHDOG_INTERVAL_MS",
+      60_000,
+      1_000,
+      86_400_000,
+    ),
+    processingWatchdogBatchSize: parseIntegerEnv(
+      "CLAIMS_PROCESSING_WATCHDOG_BATCH_SIZE",
+      25,
+      1,
+      100,
+    ),
     pollWaitSeconds: parseIntegerEnv("CLAIMS_QUEUE_POLL_WAIT_SECONDS", 20, 0, 20),
     visibilityTimeoutSeconds: parseOptionalIntegerEnv(
       "CLAIMS_QUEUE_VISIBILITY_TIMEOUT_SECONDS",

@@ -1,0 +1,2 @@
+ALTER TABLE "Claim"
+ADD COLUMN "processingAttempt" INTEGER NOT NULL DEFAULT 0;

@@ -55,6 +55,7 @@ test("dashboard claims returns organization-wide status counts and filtered rows
         productName: "Blender Hidden",
         status: "PROCESSING",
         createdAt: new Date("2026-02-04T12:00:00.000Z"),
+        updatedAt: new Date("2026-02-04T12:00:00.000Z"),
       });
 
       const result = await listDashboardClaims({
@@ -78,6 +79,7 @@ test("dashboard claims returns organization-wide status counts and filtered rows
         READY: 1,
         ERROR: 1,
       });
+      assert.equal(result.staleProcessingCount, 0);
       assert.deepEqual(
         result.claims.map((claim) => claim.externalClaimId),
         [newestMatching.externalClaimId, "dashboard-claim-b"],
@@ -110,6 +112,7 @@ test("dashboard claims paginates forward and backward with created-at cursors", 
       productName: "Middle Product",
       status: "PROCESSING",
       createdAt: new Date("2026-03-02T12:00:00.000Z"),
+      updatedAt: new Date("2026-01-01T12:00:00.000Z"),
     });
 
     const oldest = await createDashboardClaim({
@@ -134,10 +137,12 @@ test("dashboard claims paginates forward and backward with created-at cursors", 
     });
 
     assert.equal(firstPage.totalClaims, 3);
+    assert.equal(firstPage.staleProcessingCount, 1);
     assert.deepEqual(
       firstPage.claims.map((claim) => claim.externalClaimId),
       [newest.externalClaimId, middle.externalClaimId],
     );
+    assert.equal(firstPage.claims[1]?.isProcessingStale, true);
     assert.notEqual(firstPage.nextCursor, null);
     assert.equal(firstPage.prevCursor, null);
     if (!firstPage.nextCursor) {
@@ -221,6 +226,7 @@ async function createDashboardClaim(input: {
   productName: string;
   status: "NEW" | "PROCESSING" | "REVIEW_REQUIRED" | "READY" | "ERROR";
   createdAt: Date;
+  updatedAt?: Date;
 }) {
   const claim = await prisma.claim.create({
     data: {
@@ -243,6 +249,14 @@ async function createDashboardClaim(input: {
     SET "createdAt" = ${input.createdAt}
     WHERE "id" = ${claim.id}
   `;
+
+  if (input.updatedAt) {
+    await prisma.$executeRaw`
+      UPDATE "Claim"
+      SET "updatedAt" = ${input.updatedAt}
+      WHERE "id" = ${claim.id}
+    `;
+  }
 
   return claim;
 }

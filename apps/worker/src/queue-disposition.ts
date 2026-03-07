@@ -6,14 +6,30 @@ import {
 import { extractErrorMessage } from "./errors.js";
 import { truncateString } from "./strings.js";
 
-export type ClaimIngestQueueMessage = {
-  version: 1;
+type ClaimIngestQueueMessageBase = {
   claimId: string;
   organizationId: string;
   inboundMessageId: string;
   providerMessageId: string;
   enqueuedAt: string;
 };
+
+export type ClaimIngestQueueMessage =
+  | (ClaimIngestQueueMessageBase & {
+      version: 1;
+      processingAttempt?: undefined;
+      processingLeaseToken?: undefined;
+    })
+  | (ClaimIngestQueueMessageBase & {
+      version: 2;
+      processingAttempt: number;
+      processingLeaseToken?: undefined;
+    })
+  | (ClaimIngestQueueMessageBase & {
+      version: 3;
+      processingAttempt: number;
+      processingLeaseToken: string;
+    });
 
 type QueueDispositionContextValue = string | number | boolean | null | undefined;
 
@@ -30,6 +46,8 @@ export type QueueSqsClient = {
 export type MarkClaimAsErrorInput = {
   claimId: string;
   organizationId: string;
+  processingAttempt?: number;
+  processingLeaseToken?: string;
   reason: string;
   retryable: boolean;
   receiveCount: number;
@@ -38,6 +56,12 @@ export type MarkClaimAsErrorInput = {
 
 type QueueDispositionDependencies = {
   markClaimAsErrorFn: (input: MarkClaimAsErrorInput) => Promise<void>;
+  releaseClaimProcessingLeaseFn?: (input: {
+    claimId: string;
+    organizationId: string;
+    processingAttempt?: number;
+    processingLeaseToken?: string;
+  }) => Promise<void>;
   captureExceptionFn?: (
     error: unknown,
     context: Record<string, QueueDispositionContextValue>,
@@ -101,6 +125,16 @@ export async function handleQueueProcessingFailure(
           retryable: input.retryable,
           receiveCount: input.receiveCount,
           failureDisposition: "moved_to_dlq",
+          ...(typeof input.queueMessage.processingAttempt === "number"
+            ? {
+                processingAttempt: input.queueMessage.processingAttempt,
+              }
+            : {}),
+          ...(typeof input.queueMessage.processingLeaseToken === "string"
+            ? {
+                processingLeaseToken: input.queueMessage.processingLeaseToken,
+              }
+            : {}),
         });
       }
 
@@ -130,6 +164,16 @@ export async function handleQueueProcessingFailure(
         retryable: input.retryable,
         receiveCount: input.receiveCount,
         failureDisposition: "dropped_non_retryable",
+        ...(typeof input.queueMessage.processingAttempt === "number"
+          ? {
+              processingAttempt: input.queueMessage.processingAttempt,
+            }
+          : {}),
+        ...(typeof input.queueMessage.processingLeaseToken === "string"
+          ? {
+              processingLeaseToken: input.queueMessage.processingLeaseToken,
+            }
+          : {}),
       });
     }
 
@@ -154,6 +198,28 @@ export async function handleQueueProcessingFailure(
     retryable: input.retryable,
     reason: input.reason,
   });
+
+  if (
+    input.queueMessage &&
+    typeof input.queueMessage.processingAttempt === "number" &&
+    typeof input.queueMessage.processingLeaseToken === "string"
+  ) {
+    try {
+      await dependencies.releaseClaimProcessingLeaseFn?.({
+        claimId: input.queueMessage.claimId,
+        organizationId: input.queueMessage.organizationId,
+        processingAttempt: input.queueMessage.processingAttempt,
+        processingLeaseToken: input.queueMessage.processingLeaseToken,
+      });
+    } catch (error: unknown) {
+      dependencies.logErrorFn("claim_processing_lease_release_failed", {
+        claimId: input.queueMessage.claimId,
+        organizationId: input.queueMessage.organizationId,
+        error: extractErrorMessage(error),
+      });
+    }
+  }
+
   return "retrying";
 }
 

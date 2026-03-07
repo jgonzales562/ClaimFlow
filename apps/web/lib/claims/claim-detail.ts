@@ -1,5 +1,6 @@
 import { prisma } from "@claimflow/db";
 import { parseWorkerFailureEvent, type WorkerFailureEvent } from "./worker-failure";
+import { isClaimProcessingStale } from "./processing-health";
 
 const CLAIM_DETAIL_ATTACHMENT_LIMIT = 10;
 const CLAIM_DETAIL_EVENT_LIMIT = 25;
@@ -19,6 +20,7 @@ export type ClaimDetailRecord = {
   status: "NEW" | "PROCESSING" | "REVIEW_REQUIRED" | "READY" | "ERROR";
   createdAt: Date;
   updatedAt: Date;
+  isProcessingStale: boolean;
   storedAttachmentCount: number;
   latestFailure: WorkerFailureEvent | null;
   attachments: Array<{
@@ -148,6 +150,7 @@ export async function loadClaimDetail(input: {
 
   return {
     ...claim,
+    isProcessingStale: isClaimProcessingStale(claim.status, claim.updatedAt),
     storedAttachmentCount,
     latestFailure: latestWorkerFailureEvent
       ? parseWorkerFailureEvent(latestWorkerFailureEvent.payload, latestWorkerFailureEvent.createdAt)

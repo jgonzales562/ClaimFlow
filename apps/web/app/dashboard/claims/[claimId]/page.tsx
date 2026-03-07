@@ -25,7 +25,12 @@ import {
   TableSection,
 } from "@/components/ui/dashboard";
 import { formatTokenLabel, getClaimStatusTone, getWarrantyTone } from "@/lib/ui";
-import { retryClaimAction, transitionClaimStatusAction, updateClaimReviewAction } from "./actions";
+import {
+  recoverProcessingAction,
+  retryClaimAction,
+  transitionClaimStatusAction,
+  updateClaimReviewAction,
+} from "./actions";
 
 type ClaimDetailPageProps = {
   params: Promise<{ claimId: string }>;
@@ -64,7 +69,11 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
   const extractionConfidence = latestExtraction
     ? Math.round(latestExtraction.confidence * 100)
     : null;
-  const reviewSignal = getClaimReviewSignal(claim.status, claim.missingInfo.length);
+  const reviewSignal = getClaimReviewSignal(
+    claim.status,
+    claim.missingInfo.length,
+    claim.isProcessingStale,
+  );
 
   return (
     <main className="app-shell page-stack">
@@ -266,8 +275,25 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                   </p>
                 ) : null}
 
+                {claim.status === "PROCESSING" && claim.isProcessingStale ? (
+                  <form action={recoverProcessingAction}>
+                    <input type="hidden" name="claimId" value={claim.id} />
+                    <button type="submit" className="button button--secondary">
+                      Recover processing
+                    </button>
+                  </form>
+                ) : null}
+
+                {claim.status === "PROCESSING" && claim.isProcessingStale ? (
+                  <p className="section-copy copy-reset">
+                    This claim has been processing longer than expected. Queue a fresh recovery
+                    attempt if intake appears stalled.
+                  </p>
+                ) : null}
+
                 {claim.status !== "REVIEW_REQUIRED" &&
                 claim.status !== "READY" &&
+                !(claim.status === "PROCESSING" && claim.isProcessingStale) &&
                 !(claim.status === "ERROR" && claim.latestFailure?.retryable === true) ? (
                   <p className="section-copy copy-reset">
                     Transition actions appear once the claim reaches review-ready states.

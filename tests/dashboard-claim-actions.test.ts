@@ -214,6 +214,50 @@ test("dashboard retry action revalidates and redirects back to the triage page o
   ]);
 });
 
+test("dashboard processing recovery action redirects when the claim is not eligible", async () => {
+  const harness = createHarness({
+    recoverStaleProcessingClaimFn: async () => ({ kind: "recovery_not_allowed" }),
+  });
+
+  await expectRedirect(
+    () => harness.handlers.recoverProcessingAction(buildProcessingRecoveryFormData()),
+    "/dashboard/claims/claim-1?error=claim_processing_recovery_not_allowed",
+  );
+
+  assert.equal(harness.recoveryCalls.length, 0);
+  assert.deepEqual(harness.revalidatedPaths, []);
+});
+
+test("dashboard processing recovery action revalidates and redirects on success", async () => {
+  const harness = createHarness({
+    recoverStaleProcessingClaimFn: async (input) => {
+      harness.recoveryCalls.push(input);
+      return {
+        kind: "recovered",
+        claimId: "claim-1",
+      };
+    },
+  });
+
+  await expectRedirect(
+    () =>
+      harness.handlers.recoverProcessingAction(
+        buildProcessingRecoveryFormData({
+          returnTo: "/dashboard/claims/claim-1?foo=bar",
+        }),
+      ),
+    "/dashboard/claims/claim-1?foo=bar&notice=claim_processing_recovery_started",
+  );
+
+  assert.equal(harness.recoveryCalls.length, 1);
+  assert.deepEqual(harness.recoveryCalls[0], {
+    organizationId: DEFAULT_AUTH.organizationId,
+    actorUserId: DEFAULT_AUTH.userId,
+    claimId: "claim-1",
+  });
+  assert.deepEqual(harness.revalidatedPaths, ["/dashboard", "/dashboard/claims/claim-1"]);
+});
+
 const DEFAULT_AUTH = {
   userId: "user-1",
   organizationId: "org-1",
@@ -225,6 +269,7 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
   const updateCalls: Array<Record<string, unknown>> = [];
   const transitionCalls: Array<Record<string, unknown>> = [];
   const retryCalls: Array<Record<string, unknown>> = [];
+  const recoveryCalls: Array<Record<string, unknown>> = [];
 
   const handlers = createDashboardClaimActionHandlers({
     getAuthContextFn: overrides.getAuthContextFn ?? (async () => DEFAULT_AUTH),
@@ -259,6 +304,15 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
           claimId: input.claimId,
         };
       }),
+    recoverStaleProcessingClaimFn:
+      overrides.recoverStaleProcessingClaimFn ??
+      (async (input) => {
+        recoveryCalls.push(input as unknown as Record<string, unknown>);
+        return {
+          kind: "recovered",
+          claimId: input.claimId,
+        };
+      }),
   });
 
   return {
@@ -267,6 +321,7 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
     updateCalls,
     transitionCalls,
     retryCalls,
+    recoveryCalls,
   };
 }
 
@@ -306,6 +361,17 @@ function buildTransitionFormData(
 }
 
 function buildRetryFormData(
+  overrides: Partial<{ claimId: string; returnTo: string }> = {},
+): FormData {
+  const formData = new FormData();
+  formData.set("claimId", overrides.claimId ?? "claim-1");
+  if (overrides.returnTo) {
+    formData.set("returnTo", overrides.returnTo);
+  }
+  return formData;
+}
+
+function buildProcessingRecoveryFormData(
   overrides: Partial<{ claimId: string; returnTo: string }> = {},
 ): FormData {
   const formData = new FormData();

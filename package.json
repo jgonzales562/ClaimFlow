@@ -9,7 +9,7 @@
     "test": "pnpm --filter @claimflow/db build && TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/*.test.ts",
     "test:smoke": "pnpm --filter @claimflow/db build && TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/full-pipeline-smoke.test.ts",
     "test:e2e": "playwright test",
-    "typecheck": "pnpm -r typecheck",
+    "typecheck": "pnpm --filter @claimflow/db build && pnpm -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "db:generate": "pnpm --filter @claimflow/db prisma:generate",

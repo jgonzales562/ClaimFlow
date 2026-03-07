@@ -116,8 +116,8 @@ test("webhook enqueue does not duplicate transitions for claims already processi
   }
 });
 
-test("worker failure marks non-error claims as ERROR and records failure metadata", async () => {
-  const { organizationId, claimId, cleanup } = await createClaimFixture("REVIEW_REQUIRED");
+test("worker failure marks processing claims as ERROR and records failure metadata", async () => {
+  const { organizationId, claimId, cleanup } = await createClaimFixture("PROCESSING");
 
   try {
     await markClaimAsError(prisma, {
@@ -147,7 +147,7 @@ test("worker failure marks non-error claims as ERROR and records failure metadat
     assert.equal(updatedClaim.status, "ERROR");
     assert.equal(updatedClaim.events.length, 1);
     assert.deepEqual(readPayloadRecord(updatedClaim.events[0]?.payload), {
-      fromStatus: "REVIEW_REQUIRED",
+      fromStatus: "PROCESSING",
       toStatus: "ERROR",
       source: "worker_failure",
       failureDisposition: "dropped_non_retryable",
@@ -155,6 +155,128 @@ test("worker failure marks non-error claims as ERROR and records failure metadat
       retryable: false,
       reason: "forced test failure",
     });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("worker failure does not overwrite claims that already left PROCESSING", async () => {
+  const { organizationId, claimId, cleanup } = await createClaimFixture("READY");
+
+  try {
+    await markClaimAsError(prisma, {
+      claimId,
+      organizationId,
+      reason: "late failure should not win",
+      retryable: true,
+      receiveCount: 2,
+      failureDisposition: "moved_to_dlq",
+    });
+
+    const updatedClaim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        events: {
+          where: {
+            eventType: "STATUS_TRANSITION",
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(updatedClaim.status, "READY");
+    assert.equal(updatedClaim.events.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("worker failure does not overwrite newer processing attempts", async () => {
+  const { organizationId, claimId, cleanup } = await createClaimFixture("PROCESSING", {
+    processingAttempt: 2,
+  });
+
+  try {
+    await markClaimAsError(prisma, {
+      claimId,
+      organizationId,
+      processingAttempt: 1,
+      reason: "stale attempt should not win",
+      retryable: true,
+      receiveCount: 2,
+      failureDisposition: "moved_to_dlq",
+    });
+
+    const updatedClaim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        processingAttempt: true,
+        events: {
+          where: {
+            eventType: "STATUS_TRANSITION",
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(updatedClaim.status, "PROCESSING");
+    assert.equal(updatedClaim.processingAttempt, 2);
+    assert.equal(updatedClaim.events.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
+test("worker failure does not overwrite when the processing lease token no longer matches", async () => {
+  const { organizationId, claimId, cleanup } = await createClaimFixture("PROCESSING", {
+    processingAttempt: 2,
+    processingLeaseToken: "lease-current",
+    processingLeaseClaimedAt: new Date("2026-03-07T12:00:00.000Z"),
+  });
+
+  try {
+    await markClaimAsError(prisma, {
+      claimId,
+      organizationId,
+      processingAttempt: 2,
+      processingLeaseToken: "lease-stale",
+      reason: "stale lease should not win",
+      retryable: true,
+      receiveCount: 2,
+      failureDisposition: "moved_to_dlq",
+    });
+
+    const updatedClaim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        processingAttempt: true,
+        processingLeaseToken: true,
+        processingLeaseClaimedAt: true,
+        events: {
+          where: {
+            eventType: "STATUS_TRANSITION",
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(updatedClaim.status, "PROCESSING");
+    assert.equal(updatedClaim.processingAttempt, 2);
+    assert.equal(updatedClaim.processingLeaseToken, "lease-current");
+    assert.equal(updatedClaim.processingLeaseClaimedAt?.toISOString(), "2026-03-07T12:00:00.000Z");
+    assert.equal(updatedClaim.events.length, 0);
   } finally {
     await cleanup();
   }
@@ -203,6 +325,7 @@ test("worker extraction promotes complete high-confidence claims to READY", asyn
       claim: {
         id: claimId,
         organizationId,
+        processingAttempt: 0,
         customerName: null,
         productName: null,
         serialNumber: null,
@@ -320,6 +443,7 @@ test("worker extraction keeps prior values and lands in REVIEW_REQUIRED when dat
       claim: {
         id: claimId,
         organizationId,
+        processingAttempt: 0,
         customerName: "Existing Customer",
         productName: "Existing Product",
         serialNumber: "EXISTING-SERIAL",
@@ -405,6 +529,74 @@ test("worker extraction keeps prior values and lands in REVIEW_REQUIRED when dat
   }
 });
 
+test("worker extraction skips writes when the claim already left PROCESSING", async () => {
+  const { organizationId, claimId, cleanup, inboundMessageId } = await createClaimFixture("READY", {
+    issueSummary: "Existing issue summary",
+  });
+
+  try {
+    const nextStatus = await persistClaimExtractionOutcome(prisma, {
+      claim: {
+        id: claimId,
+        organizationId,
+        processingAttempt: 0,
+        customerName: null,
+        productName: null,
+        serialNumber: null,
+        purchaseDate: null,
+        issueSummary: "Existing issue summary",
+        retailer: null,
+      },
+      inboundMessageId,
+      selectedExtraction: buildExtractionResult({
+        customerName: "Late Worker",
+        productName: "Duplicate Blender",
+        warrantyStatus: "LIKELY_IN_WARRANTY",
+        missingInfo: [],
+        confidence: 0.92,
+      }),
+      primaryRawOutput: { provider: "late-primary" },
+      secondaryRawOutput: null,
+      extractionSource: "openai_direct",
+      shouldAttemptTextract: false,
+      usedTextractPass: false,
+      textractMetadata: { attempted: false, reason: "not_triggered" },
+      inboundTextChars: 320,
+      extractionReadyConfidence: 0.85,
+    });
+
+    assert.equal(nextStatus, "READY");
+
+    const updatedClaim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        customerName: true,
+        extractions: {
+          select: {
+            id: true,
+          },
+        },
+        events: {
+          where: {
+            eventType: "STATUS_TRANSITION",
+          },
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(updatedClaim.status, "READY");
+    assert.equal(updatedClaim.customerName, null);
+    assert.equal(updatedClaim.extractions.length, 0);
+    assert.equal(updatedClaim.events.length, 0);
+  } finally {
+    await cleanup();
+  }
+});
+
 function readPayloadRecord(value: unknown): Record<string, unknown> {
   assert.equal(typeof value, "object");
   assert.notEqual(value, null);
@@ -438,7 +630,7 @@ function buildExtractionResult(
 }
 
 async function createClaimFixture(
-  status: "NEW" | "PROCESSING" | "REVIEW_REQUIRED" | "ERROR",
+  status: "NEW" | "PROCESSING" | "REVIEW_REQUIRED" | "READY" | "ERROR",
   claimOverrides: Partial<{
     customerName: string | null;
     productName: string | null;
@@ -446,6 +638,9 @@ async function createClaimFixture(
     purchaseDate: Date | null;
     issueSummary: string | null;
     retailer: string | null;
+    processingAttempt: number;
+    processingLeaseToken: string | null;
+    processingLeaseClaimedAt: Date | null;
   }> = {},
 ) {
   const suffix = randomUUID();
@@ -471,6 +666,9 @@ async function createClaimFixture(
       purchaseDate: claimOverrides.purchaseDate,
       issueSummary: claimOverrides.issueSummary ?? "Integration test claim",
       retailer: claimOverrides.retailer,
+      processingAttempt: claimOverrides.processingAttempt ?? 0,
+      processingLeaseToken: claimOverrides.processingLeaseToken ?? null,
+      processingLeaseClaimedAt: claimOverrides.processingLeaseClaimedAt ?? null,
     },
     select: {
       id: true,

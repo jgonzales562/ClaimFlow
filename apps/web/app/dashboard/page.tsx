@@ -50,13 +50,14 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const cursor = parseTimestampCursor(readSearchParam(resolvedSearchParams, "cursor"));
   const direction = parsePageDirection(readSearchParam(resolvedSearchParams, "direction"));
 
-  const { claims, totalClaims, statusCounts, nextCursor, prevCursor } = await listDashboardClaims({
-    organizationId: auth.organizationId,
-    filters,
-    cursor,
-    direction,
-    pageSize: DASHBOARD_PAGE_SIZE,
-  });
+  const { claims, totalClaims, statusCounts, staleProcessingCount, nextCursor, prevCursor } =
+    await listDashboardClaims({
+      organizationId: auth.organizationId,
+      filters,
+      cursor,
+      direction,
+      pageSize: DASHBOARD_PAGE_SIZE,
+    });
 
   const newCount = statusCounts.NEW ?? 0;
   const processingCount = statusCounts.PROCESSING ?? 0;
@@ -182,7 +183,7 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               tone="info"
               label="Intake share"
               value={formatPercent(intakeShare)}
-              copy={`${numberFormatter.format(intakeCount)} claims are still in new or processing states.`}
+              copy={`${numberFormatter.format(intakeCount)} claims are still in new or processing states, including ${numberFormatter.format(staleProcessingCount)} stalled in processing.`}
             />
             <GlanceCard
               tone={dominantStage.count > 0 ? dominantStage.tone : "neutral"}
@@ -199,6 +200,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
               label="Analyst load"
               value={formatPercent(reviewLoadShare)}
               copy={`${numberFormatter.format(reviewRequiredCount + errorCount)} claims either need review or are blocked by an exception.`}
+            />
+            <GlanceCard
+              tone={staleProcessingCount > 0 ? "warning" : "success"}
+              label="Stalled intake"
+              value={numberFormatter.format(staleProcessingCount)}
+              copy={
+                staleProcessingCount > 0
+                  ? "Claims have been processing longer than expected and can be recovered from the claim detail page."
+                  : "No claims are currently showing stalled processing."
+              }
             />
             <GlanceCard
               tone="success"
@@ -331,6 +342,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                       <Pill tone={getClaimStatusTone(claim.status)}>
                         {formatTokenLabel(claim.status)}
                       </Pill>
+                      {claim.isProcessingStale ? (
+                        <div className="subtle-text">Recovery available</div>
+                      ) : null}
                     </td>
                     <td data-label="Warranty">
                       <Pill tone={getWarrantyTone(claim.warrantyStatus)}>

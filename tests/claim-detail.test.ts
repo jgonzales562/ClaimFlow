@@ -216,6 +216,42 @@ test("claim detail returns the latest extraction, recent attachments, recent eve
   }
 });
 
+test("claim detail flags processing claims that are stale", async () => {
+  const fixture = await createClaimDetailFixture();
+
+  try {
+    const claim = await prisma.claim.create({
+      data: {
+        organizationId: fixture.organizationId,
+        externalClaimId: `claim-detail-stale-${randomUUID()}`,
+        sourceEmail: `detail-stale-${randomUUID()}@example.com`,
+        issueSummary: "Stale processing claim",
+        status: "PROCESSING",
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    await prisma.$executeRaw`
+      UPDATE "Claim"
+      SET "updatedAt" = ${new Date("2026-01-01T12:00:00.000Z")}
+      WHERE "id" = ${claim.id}
+    `;
+
+    const detail = await loadClaimDetail({
+      organizationId: fixture.organizationId,
+      claimId: claim.id,
+    });
+
+    assert.notEqual(detail, null);
+    assert.equal(detail?.status, "PROCESSING");
+    assert.equal(detail?.isProcessingStale, true);
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 async function createClaimDetailFixture() {
   const suffix = randomUUID();
   const userEmail = `claim-detail-${suffix}@example.com`;
