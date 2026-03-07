@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   describeClaimEvent,
+  formatClaimProcessingAttempt,
   formatClaimAttachmentBytes,
   getClaimEventTone,
+  getClaimProcessingLeaseSignal,
   getClaimReviewSignal,
   mapClaimDetailError,
   mapClaimDetailNotice,
@@ -67,6 +69,53 @@ test("claim detail review signal picks the expected operational posture", () => 
   });
   assert.equal(getClaimReviewSignal("PROCESSING", 1).tone, "warning");
   assert.equal(getClaimReviewSignal("NEW", 0).tone, "info");
+});
+
+test("claim detail processing helpers describe attempt and lease posture safely", () => {
+  assert.equal(formatClaimProcessingAttempt("NEW", 0), "Not started");
+  assert.equal(formatClaimProcessingAttempt("ERROR", 0), "Legacy");
+  assert.equal(formatClaimProcessingAttempt("PROCESSING", 3), "Attempt 3");
+
+  assert.deepEqual(
+    getClaimProcessingLeaseSignal({
+      status: "PROCESSING",
+      processingLeaseToken: "lease-active",
+      processingLeaseClaimedAt: new Date("2026-03-07T12:00:00.000Z"),
+      isProcessingStale: false,
+    }),
+    {
+      value: "Worker claimed",
+      copy: "A worker is currently handling this processing attempt.",
+      tone: "info",
+    },
+  );
+
+  assert.deepEqual(
+    getClaimProcessingLeaseSignal({
+      status: "PROCESSING",
+      processingLeaseToken: "lease-pending",
+      processingLeaseClaimedAt: null,
+      isProcessingStale: true,
+    }),
+    {
+      value: "Queued, stalled",
+      copy: "This claim is still queued and no worker has claimed the lease within the expected window.",
+      tone: "warning",
+    },
+  );
+
+  assert.deepEqual(
+    getClaimProcessingLeaseSignal({
+      status: "READY",
+      processingLeaseToken: null,
+      processingLeaseClaimedAt: null,
+    }),
+    {
+      value: "Released",
+      copy: "No worker currently holds a processing lease for this claim.",
+      tone: "neutral",
+    },
+  );
 });
 
 test("claim detail event helpers format extraction and audit payloads safely", () => {

@@ -24,7 +24,11 @@ import {
   parseErrorClaimsCursor,
   parseErrorClaimsPageDirection,
 } from "@/lib/claims/error-claims";
-import { mapClaimDetailError, mapClaimDetailNotice } from "@/lib/claims/claim-detail-ui";
+import {
+  formatClaimProcessingAttempt,
+  mapClaimDetailError,
+  mapClaimDetailNotice,
+} from "@/lib/claims/claim-detail-ui";
 import {
   formatClaimReference,
   formatPercent,
@@ -286,6 +290,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                 <th>Claim</th>
                 <th>Customer / Product</th>
                 <th>Updated</th>
+                <th>Attempt</th>
                 <th>Failure Reason</th>
                 <th>Retryable</th>
                 <th>Receive Count</th>
@@ -296,7 +301,7 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
             <tbody>
               {!payload || payload.claims.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="empty-state">
+                  <td colSpan={9} className="empty-state">
                     No error claims found for the selected filters.
                   </td>
                 </tr>
@@ -320,6 +325,9 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                     <td data-label="Updated">
                       <div>{formatUtcDateTime(claim.updatedAt)}</div>
                       <span className="subtle-text">{claim.sourceEmail ?? "-"}</span>
+                    </td>
+                    <td data-label="Attempt">
+                      <div>{formatClaimProcessingAttempt(claim.status, claim.processingAttempt)}</div>
                     </td>
                     <td data-label="Failure Reason">
                       <div>{claim.failure?.reason ?? "-"}</div>

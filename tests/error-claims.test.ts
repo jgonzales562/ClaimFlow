@@ -21,6 +21,7 @@ test("error claims returns filtered total count instead of the current page leng
       productName: "Blender Pro",
       updatedAt: new Date("2026-01-03T12:00:00.000Z"),
       failureReason: "first failure",
+      processingAttempt: 3,
     });
 
     await createErrorClaim({
@@ -76,6 +77,7 @@ test("error claims returns filtered total count instead of the current page leng
       assert.equal(result.claims.length, 1);
       assert.equal(result.totalCount, 2);
       assert.equal(result.claims[0]?.externalClaimId, firstMatchingClaim.externalClaimId);
+      assert.equal(result.claims[0]?.processingAttempt, 3);
       assert.deepEqual(result.claims[0]?.failure, {
         source: "worker_failure",
         occurredAt: firstMatchingClaim.failureCreatedAt.toISOString(),
@@ -225,6 +227,7 @@ async function createErrorClaim(input: {
   productName: string;
   updatedAt: Date;
   failureReason: string;
+  processingAttempt?: number;
 }) {
   const claim = await prisma.claim.create({
     data: {
@@ -235,6 +238,7 @@ async function createErrorClaim(input: {
       productName: input.productName,
       issueSummary: `Issue for ${input.externalClaimId}`,
       status: "ERROR",
+      processingAttempt: input.processingAttempt ?? 0,
     },
     select: {
       id: true,

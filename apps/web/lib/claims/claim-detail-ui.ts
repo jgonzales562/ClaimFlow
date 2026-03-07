@@ -7,6 +7,12 @@ export type ReviewSignal = {
   tone: PillTone;
 };
 
+export type ClaimProcessingLeaseSignal = {
+  value: string;
+  copy: string;
+  tone: PillTone;
+};
+
 export function getClaimEventTone(eventType: string): "neutral" | "info" {
   return eventType === "STATUS_TRANSITION" ? "info" : "neutral";
 }
@@ -66,6 +72,66 @@ export function getClaimReviewSignal(
     title: "Monitor status",
     copy: "The claim is active, but it does not currently fit a stronger operational signal.",
     tone: "neutral",
+  };
+}
+
+export function formatClaimProcessingAttempt(status: string, processingAttempt: number): string {
+  if (processingAttempt > 0) {
+    return `Attempt ${processingAttempt}`;
+  }
+
+  return status === "NEW" ? "Not started" : "Legacy";
+}
+
+export function getClaimProcessingLeaseSignal(input: {
+  status: string;
+  processingLeaseToken: string | null;
+  processingLeaseClaimedAt: Date | null;
+  isProcessingStale?: boolean;
+}): ClaimProcessingLeaseSignal {
+  if (input.status !== "PROCESSING") {
+    if (!input.processingLeaseToken) {
+      return {
+        value: input.status === "NEW" ? "Inactive" : "Released",
+        copy:
+          input.status === "NEW"
+            ? "No processing lease has been issued for this claim yet."
+            : "No worker currently holds a processing lease for this claim.",
+        tone: "neutral",
+      };
+    }
+
+    return {
+      value: "Pending release",
+      copy: "This claim still has processing lease state recorded even though it is no longer in active processing.",
+      tone: "warning",
+    };
+  }
+
+  if (!input.processingLeaseToken) {
+    return {
+      value: "Untracked",
+      copy: "This processing claim does not have an active lease token, so worker ownership cannot be verified.",
+      tone: "warning",
+    };
+  }
+
+  if (input.processingLeaseClaimedAt) {
+    return {
+      value: input.isProcessingStale ? "Claimed, stalled" : "Worker claimed",
+      copy: input.isProcessingStale
+        ? "A worker claimed this attempt, but the claim now looks stalled and may need recovery."
+        : "A worker is currently handling this processing attempt.",
+      tone: input.isProcessingStale ? "warning" : "info",
+    };
+  }
+
+  return {
+    value: input.isProcessingStale ? "Queued, stalled" : "Queued",
+    copy: input.isProcessingStale
+      ? "This claim is still queued and no worker has claimed the lease within the expected window."
+      : "The claim has an active processing lease and is waiting for a worker to claim it.",
+    tone: input.isProcessingStale ? "warning" : "info",
   };
 }
 

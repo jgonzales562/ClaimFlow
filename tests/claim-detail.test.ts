@@ -220,6 +220,7 @@ test("claim detail flags processing claims that are stale", async () => {
   const fixture = await createClaimDetailFixture();
 
   try {
+    const leaseClaimedAt = new Date("2026-01-01T13:00:00.000Z");
     const claim = await prisma.claim.create({
       data: {
         organizationId: fixture.organizationId,
@@ -227,6 +228,9 @@ test("claim detail flags processing claims that are stale", async () => {
         sourceEmail: `detail-stale-${randomUUID()}@example.com`,
         issueSummary: "Stale processing claim",
         status: "PROCESSING",
+        processingAttempt: 2,
+        processingLeaseToken: "lease-detail-stale-2",
+        processingLeaseClaimedAt: leaseClaimedAt,
       },
       select: {
         id: true,
@@ -247,6 +251,9 @@ test("claim detail flags processing claims that are stale", async () => {
     assert.notEqual(detail, null);
     assert.equal(detail?.status, "PROCESSING");
     assert.equal(detail?.isProcessingStale, true);
+    assert.equal(detail?.processingAttempt, 2);
+    assert.equal(detail?.processingLeaseToken, "lease-detail-stale-2");
+    assert.equal(detail?.processingLeaseClaimedAt?.toISOString(), leaseClaimedAt.toISOString());
   } finally {
     await fixture.cleanup();
   }

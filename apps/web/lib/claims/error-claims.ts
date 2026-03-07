@@ -19,6 +19,7 @@ export type ErrorClaimRecord = {
   productName: string | null;
   status: string;
   warrantyStatus: string;
+  processingAttempt: number;
   createdAt: string;
   updatedAt: string;
   failure: WorkerFailureEvent | null;
@@ -68,6 +69,7 @@ export async function listErrorClaims(input: {
         productName: true,
         status: true,
         warrantyStatus: true,
+        processingAttempt: true,
         createdAt: true,
         updatedAt: true,
         events: {
@@ -110,6 +112,7 @@ export async function listErrorClaims(input: {
       productName: claim.productName,
       status: claim.status,
       warrantyStatus: claim.warrantyStatus,
+      processingAttempt: claim.processingAttempt,
       createdAt: claim.createdAt.toISOString(),
       updatedAt: claim.updatedAt.toISOString(),
       failure: failure ?? null,

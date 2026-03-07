@@ -18,6 +18,9 @@ export type ClaimDetailRecord = {
   warrantyStatus: "LIKELY_IN_WARRANTY" | "LIKELY_EXPIRED" | "UNCLEAR";
   missingInfo: string[];
   status: "NEW" | "PROCESSING" | "REVIEW_REQUIRED" | "READY" | "ERROR";
+  processingAttempt: number;
+  processingLeaseToken: string | null;
+  processingLeaseClaimedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   isProcessingStale: boolean;
@@ -73,6 +76,9 @@ export async function loadClaimDetail(input: {
         warrantyStatus: true,
         missingInfo: true,
         status: true,
+        processingAttempt: true,
+        processingLeaseToken: true,
+        processingLeaseClaimedAt: true,
         createdAt: true,
         updatedAt: true,
         attachments: {

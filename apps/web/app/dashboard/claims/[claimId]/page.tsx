@@ -5,8 +5,10 @@ import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { loadClaimDetail } from "@/lib/claims/claim-detail";
 import {
   describeClaimEvent,
+  formatClaimProcessingAttempt,
   formatClaimAttachmentBytes,
   getClaimEventTone,
+  getClaimProcessingLeaseSignal,
   getClaimReviewSignal,
   mapClaimDetailError,
   mapClaimDetailNotice,
@@ -74,6 +76,12 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
     claim.missingInfo.length,
     claim.isProcessingStale,
   );
+  const processingLeaseSignal = getClaimProcessingLeaseSignal({
+    status: claim.status,
+    processingLeaseToken: claim.processingLeaseToken,
+    processingLeaseClaimedAt: claim.processingLeaseClaimedAt,
+    isProcessingStale: claim.isProcessingStale,
+  });
 
   return (
     <main className="app-shell page-stack">
@@ -357,6 +365,35 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
           </PanelSection>
 
           <PanelSection
+            kicker="Processing telemetry"
+            title="Attempt and lease state"
+            copy="Operational context for the current intake attempt, worker ownership, and recovery posture."
+          >
+            <div className="glance-grid">
+              <GlanceCard
+                tone={claim.processingAttempt > 1 ? "warning" : "info"}
+                label="Processing attempt"
+                value={formatClaimProcessingAttempt(claim.status, claim.processingAttempt)}
+                copy={
+                  claim.processingAttempt > 1
+                    ? "This claim has already re-entered automated intake after an earlier retry or recovery."
+                    : claim.processingAttempt === 1
+                      ? "This claim is on its first tracked automated intake attempt."
+                      : claim.status === "NEW"
+                        ? "The claim has not entered tracked processing yet."
+                        : "This claim predates the current attempt-tracking model."
+                }
+              />
+              <GlanceCard
+                tone={processingLeaseSignal.tone}
+                label="Lease posture"
+                value={processingLeaseSignal.value}
+                copy={processingLeaseSignal.copy}
+              />
+            </div>
+          </PanelSection>
+
+          <PanelSection
             kicker="Claim summary"
             title="Metadata"
             copy="Core identifiers and intake metadata for this claim record."
@@ -369,6 +406,16 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 value={formatDateInput(claim.purchaseDate) || "-"}
               />
               <KeyValueRow label="Retailer" value={claim.retailer ?? "-"} />
+              <KeyValueRow
+                label="Lease Claimed"
+                value={
+                  claim.processingLeaseClaimedAt
+                    ? formatUtcDateTime(claim.processingLeaseClaimedAt)
+                    : claim.status === "PROCESSING" && claim.processingLeaseToken
+                      ? "Pending worker claim"
+                      : "-"
+                }
+              />
               <KeyValueRow label="Created" value={formatUtcDateTime(claim.createdAt)} />
               <KeyValueRow label="Updated" value={formatUtcDateTime(claim.updatedAt)} />
             </div>
