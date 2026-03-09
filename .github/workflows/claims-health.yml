@@ -1,0 +1,31 @@
+name: Claims Health
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/10 * * * *"
+
+concurrency:
+  group: claims-health-check
+  cancel-in-progress: false
+
+jobs:
+  check:
+    if: ${{ secrets.CLAIMS_HEALTHCHECK_URL != '' && secrets.CLAIMS_HEALTH_BEARER_TOKEN != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check claims health endpoint
+        env:
+          CLAIMS_HEALTHCHECK_URL: ${{ secrets.CLAIMS_HEALTHCHECK_URL }}
+          CLAIMS_HEALTH_BEARER_TOKEN: ${{ secrets.CLAIMS_HEALTH_BEARER_TOKEN }}
+          CLAIMS_HEALTHCHECK_TIMEOUT_MS: "10000"
+        run: node scripts/check-claims-health.mjs

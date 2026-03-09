@@ -96,6 +96,7 @@ bash -lc 'set -a && source .env && set +a && pnpm --filter @claimflow/worker dev
 - `pnpm test`
 - `pnpm test:smoke`
 - `pnpm test:e2e`
+- `pnpm ops:check-health`
 - `pnpm db:local:status`
 - `pnpm db:local:restart`
 
@@ -131,6 +132,7 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 ## Key Docs
 
 - [IMPLEMENTATION_PLAN_V1.md](IMPLEMENTATION_PLAN_V1.md)
+- [docs/runbooks/monitor-claims-health.md](docs/runbooks/monitor-claims-health.md)
 - [docs/runbooks/retry-claims-from-dlq.md](docs/runbooks/retry-claims-from-dlq.md)
 - [packages/db/README.md](packages/db/README.md)
 
