@@ -1,37 +1,58 @@
-import * as Sentry from "@sentry/nextjs";
+import type * as SentrySDK from "@sentry/nextjs";
 
 let initialized = false;
 let enabled = false;
+let sentryModulePromise: Promise<typeof SentrySDK | null> | null = null;
+let initPromise: Promise<void> | null = null;
 
-export function initWebSentry(): void {
-  if (initialized) {
-    return;
-  }
-  initialized = true;
-
-  const dsn = process.env.SENTRY_DSN?.trim();
-  if (!dsn) {
-    enabled = false;
-    return;
+export function initWebSentry(): Promise<void> {
+  if (initPromise) {
+    return initPromise;
   }
 
-  const tracesSampleRate = parseTraceSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
+  initPromise = (async () => {
+    if (initialized) {
+      return;
+    }
+    initialized = true;
 
-  Sentry.init({
-    dsn,
-    environment: process.env.SENTRY_ENVIRONMENT?.trim() || process.env.NODE_ENV || "development",
-    tracesSampleRate,
-  });
+    const dsn = process.env.SENTRY_DSN?.trim();
+    if (!dsn) {
+      enabled = false;
+      return;
+    }
 
-  enabled = true;
+    const Sentry = await loadSentryModule();
+    if (!Sentry) {
+      enabled = false;
+      return;
+    }
+
+    const tracesSampleRate = parseTraceSampleRate(process.env.SENTRY_TRACES_SAMPLE_RATE);
+
+    Sentry.init({
+      dsn,
+      environment: process.env.SENTRY_ENVIRONMENT?.trim() || process.env.NODE_ENV || "development",
+      tracesSampleRate,
+    });
+
+    enabled = true;
+  })();
+
+  return initPromise;
 }
 
-export function captureWebException(
+export async function captureWebException(
   error: unknown,
   context: Record<string, string | number | boolean | null | undefined> = {},
-): void {
-  initWebSentry();
+): Promise<void> {
+  await initWebSentry();
   if (!enabled) {
+    return;
+  }
+
+  const Sentry = await loadSentryModule();
+  if (!Sentry) {
     return;
   }
 
@@ -48,6 +69,20 @@ export function captureWebException(
 
     Sentry.captureException(errorToCapture);
   });
+}
+
+async function loadSentryModule(): Promise<typeof SentrySDK | null> {
+  if (sentryModulePromise) {
+    return sentryModulePromise;
+  }
+
+  const dsn = process.env.SENTRY_DSN?.trim();
+  if (!dsn) {
+    return null;
+  }
+
+  sentryModulePromise = import("@sentry/nextjs");
+  return sentryModulePromise;
 }
 
 function parseTraceSampleRate(value: string | undefined): number {
