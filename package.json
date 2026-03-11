@@ -6,8 +6,8 @@
   "scripts": {
     "build": "pnpm -r build",
     "lint": "pnpm -r lint",
-    "test": "pnpm --filter @claimflow/db build && TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/*.test.ts",
-    "test:smoke": "pnpm --filter @claimflow/db build && TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/full-pipeline-smoke.test.ts",
+    "test": "TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/*.test.ts",
+    "test:smoke": "TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/full-pipeline-smoke.test.ts",
     "test:e2e": "playwright test",
     "ops:check-health": "node scripts/check-claims-health.mjs",
     "typecheck": "pnpm --filter @claimflow/db build && pnpm -r typecheck",
