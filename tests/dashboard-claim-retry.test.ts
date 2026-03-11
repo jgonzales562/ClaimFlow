@@ -268,6 +268,17 @@ async function createRetryFixture(input: { retryable: boolean }) {
     },
   });
 
+  await prisma.$executeRaw`
+    UPDATE "Claim"
+    SET
+      "latestWorkerFailureAt" = ${"2026-03-09T00:00:00.000Z"}::timestamp,
+      "latestWorkerFailureReason" = ${"Temporary extraction failure"},
+      "latestWorkerFailureRetryable" = ${input.retryable},
+      "latestWorkerFailureReceiveCount" = ${3},
+      "latestWorkerFailureDisposition" = ${"moved_to_dlq"}
+    WHERE "id" = ${claim.id}
+  `;
+
   return {
     organizationId: organization.id,
     userId: user.id,

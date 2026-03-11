@@ -1,3 +1,4 @@
+import { CLAIM_PROCESSING_RECOVERY_SOURCES } from "@claimflow/db";
 import { formatTokenLabel, type PillTone } from "@/lib/ui";
 
 export type ReviewSignal = {
@@ -209,10 +210,10 @@ export function describeClaimEvent(eventType: string, payload: unknown): string 
     const fromStatus = typeof record.fromStatus === "string" ? record.fromStatus : "unknown";
     const toStatus = typeof record.toStatus === "string" ? record.toStatus : "unknown";
     const source = typeof record.source === "string" ? record.source : null;
-    if (source === "manual_processing_recovery") {
+    if (source === CLAIM_PROCESSING_RECOVERY_SOURCES.manualProcessingRecovery) {
       return "Processing recovery queued";
     }
-    if (source === "watchdog_processing_recovery") {
+    if (source === CLAIM_PROCESSING_RECOVERY_SOURCES.watchdogProcessingRecovery) {
       return "Automatic processing recovery queued";
     }
     return source

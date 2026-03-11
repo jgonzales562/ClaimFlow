@@ -1,5 +1,8 @@
 import { SendMessageCommand } from "@aws-sdk/client-sqs";
-import { recordProcessingRecoveryIfStale } from "@claimflow/db";
+import {
+  CLAIM_PROCESSING_RECOVERY_SOURCES,
+  recordProcessingRecoveryIfStale,
+} from "@claimflow/db";
 import type { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import type { WorkerConfig } from "./config.js";
@@ -134,7 +137,7 @@ export async function recoverStaleProcessingClaims(
           tx,
           organizationId: claim.organizationId,
           claimId: claim.id,
-          source: "watchdog_processing_recovery",
+          source: CLAIM_PROCESSING_RECOVERY_SOURCES.watchdogProcessingRecovery,
           staleBefore,
           touchedAt: now,
           queueMessageId: messageId,

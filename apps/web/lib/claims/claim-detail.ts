@@ -1,5 +1,5 @@
 import { prisma } from "@claimflow/db";
-import { parseWorkerFailureEvent, type WorkerFailureEvent } from "./worker-failure";
+import { readWorkerFailureSnapshot, type WorkerFailureEvent } from "./worker-failure";
 import { isClaimProcessingStale } from "./processing-health";
 
 const CLAIM_DETAIL_ATTACHMENT_LIMIT = 10;
@@ -57,7 +57,7 @@ export async function loadClaimDetail(input: {
   organizationId: string;
   claimId: string;
 }): Promise<ClaimDetailRecord | null> {
-  const [claim, storedAttachmentCount, latestWorkerFailureEvent] = await Promise.all([
+  const [claim, storedAttachmentCount] = await Promise.all([
     prisma.claim.findFirst({
       where: {
         id: input.claimId,
@@ -79,6 +79,11 @@ export async function loadClaimDetail(input: {
         processingAttempt: true,
         processingLeaseToken: true,
         processingLeaseClaimedAt: true,
+        latestWorkerFailureAt: true,
+        latestWorkerFailureReason: true,
+        latestWorkerFailureRetryable: true,
+        latestWorkerFailureReceiveCount: true,
+        latestWorkerFailureDisposition: true,
         createdAt: true,
         updatedAt: true,
         attachments: {
@@ -132,22 +137,6 @@ export async function loadClaimDetail(input: {
         uploadStatus: "STORED",
       },
     }),
-    prisma.claimEvent.findFirst({
-      where: {
-        organizationId: input.organizationId,
-        claimId: input.claimId,
-        eventType: "STATUS_TRANSITION",
-        payload: {
-          path: ["source"],
-          equals: "worker_failure",
-        },
-      },
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-      select: {
-        createdAt: true,
-        payload: true,
-      },
-    }),
   ]);
 
   if (!claim) {
@@ -158,8 +147,6 @@ export async function loadClaimDetail(input: {
     ...claim,
     isProcessingStale: isClaimProcessingStale(claim.status, claim.updatedAt),
     storedAttachmentCount,
-    latestFailure: latestWorkerFailureEvent
-      ? parseWorkerFailureEvent(latestWorkerFailureEvent.payload, latestWorkerFailureEvent.createdAt)
-      : null,
+    latestFailure: readWorkerFailureSnapshot(claim),
   };
 }

@@ -1,7 +1,7 @@
-import { prisma, startClaimProcessingAttemptIfCurrent } from "@claimflow/db";
+import { prisma, CLAIM_PROCESSING_START_SOURCES, startClaimProcessingAttemptIfCurrent } from "@claimflow/db";
 import { randomUUID } from "node:crypto";
 import { enqueueClaimIngestJob } from "@/lib/queue/claims";
-import { parseWorkerFailureEvent } from "./worker-failure";
+import { readWorkerFailureSnapshot } from "./worker-failure";
 
 const MANUAL_RETRY_DELAY_SECONDS = 2;
 
@@ -40,27 +40,17 @@ export async function retryErroredClaim(
       id: true,
       status: true,
       processingAttempt: true,
+      latestWorkerFailureAt: true,
+      latestWorkerFailureReason: true,
+      latestWorkerFailureRetryable: true,
+      latestWorkerFailureReceiveCount: true,
+      latestWorkerFailureDisposition: true,
       inboundMessages: {
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         take: 1,
         select: {
           id: true,
           providerMessageId: true,
-        },
-      },
-      events: {
-        where: {
-          eventType: "STATUS_TRANSITION",
-          payload: {
-            path: ["source"],
-            equals: "worker_failure",
-          },
-        },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 1,
-        select: {
-          createdAt: true,
-          payload: true,
         },
       },
     },
@@ -74,10 +64,7 @@ export async function retryErroredClaim(
     return { kind: "retry_not_allowed" };
   }
 
-  const latestFailureEvent = claim.events[0];
-  const latestFailure = latestFailureEvent
-    ? parseWorkerFailureEvent(latestFailureEvent.payload, latestFailureEvent.createdAt)
-    : null;
+  const latestFailure = readWorkerFailureSnapshot(claim);
 
   if (!latestFailure || latestFailure.retryable !== true) {
     return { kind: "retry_not_allowed" };
@@ -116,7 +103,7 @@ export async function retryErroredClaim(
       expectedProcessingAttempt: claim.processingAttempt,
       processingLeaseToken,
       fromStatus: "ERROR",
-      source: "manual_retry",
+      source: CLAIM_PROCESSING_START_SOURCES.manualRetry,
       queueMessageId: queueResult.messageId,
       inboundMessageId: latestInboundMessage.id,
       providerMessageId: latestInboundMessage.providerMessageId,

@@ -20,7 +20,10 @@ import {
 import { buildClaimCursorHref } from "@/lib/claims/query-links";
 import { formatUtcDateTime } from "@/lib/format";
 import {
+  parseErrorClaimFailureDispositionFilter,
   listErrorClaims,
+  parseErrorClaimRetryabilityFilter,
+  parseErrorClaimSort,
   parseErrorClaimsCursor,
   parseErrorClaimsPageDirection,
 } from "@/lib/claims/error-claims";
@@ -58,18 +61,27 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
   const resolvedSearchParams = (await searchParams) ?? {};
   const parsedFilters = parseClaimFiltersFromRecord(resolvedSearchParams);
   const limitParam = readSearchParam(resolvedSearchParams, "limit");
+  const sortParam = readSearchParam(resolvedSearchParams, "sort");
+  const retryabilityParam = readSearchParam(resolvedSearchParams, "retryability");
+  const failureDispositionParam = readSearchParam(resolvedSearchParams, "failure_disposition");
   const cursorParam = readSearchParam(resolvedSearchParams, "cursor");
   const directionParam = readSearchParam(resolvedSearchParams, "direction");
   const notice = mapClaimDetailNotice(readSearchParam(resolvedSearchParams, "notice"));
   const error = mapClaimDetailError(readSearchParam(resolvedSearchParams, "error"));
-  const cursor = parseErrorClaimsCursor(cursorParam);
+  const sort = parseErrorClaimSort(sortParam);
+  const cursor = parseErrorClaimsCursor(cursorParam, sort);
   const direction = parseErrorClaimsPageDirection(directionParam);
+  const retryability = parseErrorClaimRetryabilityFilter(retryabilityParam);
+  const failureDisposition = parseErrorClaimFailureDispositionFilter(failureDispositionParam);
   const returnTo = buildCurrentPageHref("/dashboard/errors", resolvedSearchParams);
   const filters = {
     search: parsedFilters.search,
     createdFrom: parsedFilters.createdFrom,
     createdTo: parsedFilters.createdTo,
     limit: clampLimit(limitParam, 50, 1, 200),
+    sort,
+    retryability,
+    failureDisposition,
   };
 
   let payload: ErrorClaimsResponse | null = null;
@@ -79,6 +91,9 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
     payload = await listErrorClaims({
       organizationId: auth.organizationId,
       filters: parsedFilters,
+      retryability,
+      failureDisposition,
+      sort,
       limit: filters.limit,
       cursor,
       direction,
@@ -253,6 +268,40 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
             </label>
 
             <label className="field-label">
+              <span>Sort</span>
+              <select className="control" name="sort" defaultValue={filters.sort}>
+                <option value="updated_desc">Most recently updated</option>
+                <option value="receive_count_desc">Highest receive count</option>
+                <option value="failure_oldest_first">Oldest failures first</option>
+              </select>
+            </label>
+
+            <label className="field-label">
+              <span>Retryability</span>
+              <select className="control" name="retryability" defaultValue={filters.retryability ?? ""}>
+                <option value="">All failures</option>
+                <option value="retryable">Retryable</option>
+                <option value="non_retryable">Non-retryable</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </label>
+
+            <label className="field-label">
+              <span>Failure Disposition</span>
+              <select
+                className="control"
+                name="failure_disposition"
+                defaultValue={filters.failureDisposition ?? ""}
+              >
+                <option value="">All dispositions</option>
+                <option value="retrying">Retrying</option>
+                <option value="moved_to_dlq">Moved to DLQ</option>
+                <option value="dropped_non_retryable">Dropped non-retryable</option>
+                <option value="unknown">Unknown</option>
+              </select>
+            </label>
+
+            <label className="field-label">
               <span>Limit</span>
               <input
                 className="control"
@@ -392,7 +441,12 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                 },
                 payload.prevCursor,
                 "prev",
-                { limit: filters.limit },
+                {
+                  limit: filters.limit,
+                  sort: filters.sort,
+                  retryability: filters.retryability,
+                  failure_disposition: filters.failureDisposition,
+                },
               )}
               className="button button--secondary"
             >
@@ -411,7 +465,12 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                 },
                 payload.nextCursor,
                 "next",
-                { limit: filters.limit },
+                {
+                  limit: filters.limit,
+                  sort: filters.sort,
+                  retryability: filters.retryability,
+                  failure_disposition: filters.failureDisposition,
+                },
               )}
               className="button button--secondary"
             >

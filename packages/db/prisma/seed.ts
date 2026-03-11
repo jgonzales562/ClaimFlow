@@ -201,6 +201,7 @@ async function main(): Promise<void> {
     failureDisposition: "moved_to_dlq",
   } as const;
 
+  const seededErrorWorkerFailureEventId = existingWorkerFailureEvent?.id;
   if (existingWorkerFailureEvent) {
     await prisma.claimEvent.update({
       where: {
@@ -212,7 +213,7 @@ async function main(): Promise<void> {
       },
     });
   } else {
-    await prisma.claimEvent.create({
+    const createdWorkerFailureEvent = await prisma.claimEvent.create({
       data: {
         organizationId: organization.id,
         claimId: seededErrorClaim.id,
@@ -221,7 +222,29 @@ async function main(): Promise<void> {
         payload: workerFailurePayload,
       },
     });
+
+    await prisma.$executeRaw`
+      UPDATE "ClaimEvent"
+      SET "createdAt" = ${new Date("2026-02-20T09:00:00.000Z")}
+      WHERE "id" = ${createdWorkerFailureEvent.id}
+    `;
   }
+
+  if (seededErrorWorkerFailureEventId) {
+    await prisma.$executeRaw`
+      UPDATE "ClaimEvent"
+      SET "createdAt" = ${new Date("2026-02-20T09:00:00.000Z")}
+      WHERE "id" = ${seededErrorWorkerFailureEventId}
+    `;
+  }
+
+  await setClaimLatestWorkerFailureSnapshot(seededErrorClaim.id, {
+    occurredAt: new Date("2026-02-20T09:00:00.000Z"),
+    reason: workerFailurePayload.reason,
+    retryable: workerFailurePayload.retryable,
+    receiveCount: workerFailurePayload.receiveCount,
+    failureDisposition: workerFailurePayload.failureDisposition,
+  });
 
   const existingRetryableWorkerFailureEvent = await prisma.claimEvent.findFirst({
     where: {
@@ -249,6 +272,7 @@ async function main(): Promise<void> {
     failureDisposition: "retrying",
   } as const;
 
+  const seededRetryableWorkerFailureEventId = existingRetryableWorkerFailureEvent?.id;
   if (existingRetryableWorkerFailureEvent) {
     await prisma.claimEvent.update({
       where: {
@@ -260,7 +284,7 @@ async function main(): Promise<void> {
       },
     });
   } else {
-    await prisma.claimEvent.create({
+    const createdRetryableWorkerFailureEvent = await prisma.claimEvent.create({
       data: {
         organizationId: organization.id,
         claimId: seededRetryableErrorClaim.id,
@@ -269,7 +293,29 @@ async function main(): Promise<void> {
         payload: retryableWorkerFailurePayload,
       },
     });
+
+    await prisma.$executeRaw`
+      UPDATE "ClaimEvent"
+      SET "createdAt" = ${new Date("2026-01-15T09:00:00.000Z")}
+      WHERE "id" = ${createdRetryableWorkerFailureEvent.id}
+    `;
   }
+
+  if (seededRetryableWorkerFailureEventId) {
+    await prisma.$executeRaw`
+      UPDATE "ClaimEvent"
+      SET "createdAt" = ${new Date("2026-01-15T09:00:00.000Z")}
+      WHERE "id" = ${seededRetryableWorkerFailureEventId}
+    `;
+  }
+
+  await setClaimLatestWorkerFailureSnapshot(seededRetryableErrorClaim.id, {
+    occurredAt: new Date("2026-01-15T09:00:00.000Z"),
+    reason: retryableWorkerFailurePayload.reason,
+    retryable: retryableWorkerFailurePayload.retryable,
+    receiveCount: retryableWorkerFailurePayload.receiveCount,
+    failureDisposition: retryableWorkerFailurePayload.failureDisposition,
+  });
 
   await prisma.inboundMessage.upsert({
     where: {
@@ -403,6 +449,28 @@ async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
   const key = (await scrypt(password, salt, 64)) as Buffer;
   return `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+}
+
+async function setClaimLatestWorkerFailureSnapshot(
+  claimId: string,
+  input: {
+    occurredAt: Date;
+    reason: string | null;
+    retryable: boolean | null;
+    receiveCount: number | null;
+    failureDisposition: string | null;
+  },
+) {
+  await prisma.$executeRaw`
+    UPDATE "Claim"
+    SET
+      "latestWorkerFailureAt" = ${input.occurredAt.toISOString()}::timestamp,
+      "latestWorkerFailureReason" = ${input.reason},
+      "latestWorkerFailureRetryable" = ${input.retryable},
+      "latestWorkerFailureReceiveCount" = ${input.receiveCount},
+      "latestWorkerFailureDisposition" = ${input.failureDisposition}
+    WHERE "id" = ${claimId}
+  `;
 }
 
 main()

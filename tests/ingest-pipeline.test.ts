@@ -44,6 +44,11 @@ test("webhook enqueue transitions NEW claims to PROCESSING and records one event
       where: { id: claimId },
       select: {
         status: true,
+        latestWorkerFailureAt: true,
+        latestWorkerFailureReason: true,
+        latestWorkerFailureRetryable: true,
+        latestWorkerFailureReceiveCount: true,
+        latestWorkerFailureDisposition: true,
         events: {
           where: {
             eventType: "STATUS_TRANSITION",
@@ -98,6 +103,11 @@ test("webhook enqueue does not duplicate transitions for claims already processi
       where: { id: claimId },
       select: {
         status: true,
+        latestWorkerFailureAt: true,
+        latestWorkerFailureReason: true,
+        latestWorkerFailureRetryable: true,
+        latestWorkerFailureReceiveCount: true,
+        latestWorkerFailureDisposition: true,
         events: {
           where: {
             eventType: "STATUS_TRANSITION",
@@ -133,6 +143,11 @@ test("worker failure marks processing claims as ERROR and records failure metada
       where: { id: claimId },
       select: {
         status: true,
+        latestWorkerFailureAt: true,
+        latestWorkerFailureReason: true,
+        latestWorkerFailureRetryable: true,
+        latestWorkerFailureReceiveCount: true,
+        latestWorkerFailureDisposition: true,
         events: {
           where: {
             eventType: "STATUS_TRANSITION",
@@ -145,6 +160,11 @@ test("worker failure marks processing claims as ERROR and records failure metada
     });
 
     assert.equal(updatedClaim.status, "ERROR");
+    assert.equal(updatedClaim.latestWorkerFailureReason, "forced test failure");
+    assert.equal(updatedClaim.latestWorkerFailureRetryable, false);
+    assert.equal(updatedClaim.latestWorkerFailureReceiveCount, 3);
+    assert.equal(updatedClaim.latestWorkerFailureDisposition, "dropped_non_retryable");
+    assert.notEqual(updatedClaim.latestWorkerFailureAt, null);
     assert.equal(updatedClaim.events.length, 1);
     assert.deepEqual(readPayloadRecord(updatedClaim.events[0]?.payload), {
       fromStatus: "PROCESSING",

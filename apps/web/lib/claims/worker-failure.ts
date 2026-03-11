@@ -12,6 +12,14 @@ export type WorkerFailureEvent = {
   queueMessageId?: string;
 };
 
+export type WorkerFailureSnapshot = {
+  latestWorkerFailureAt: Date | null;
+  latestWorkerFailureReason: string | null;
+  latestWorkerFailureRetryable: boolean | null;
+  latestWorkerFailureReceiveCount: number | null;
+  latestWorkerFailureDisposition: string | null;
+};
+
 export function parseWorkerFailureEvent(payload: unknown, createdAt: Date): WorkerFailureEvent | null {
   if (typeof payload !== "object" || payload === null) {
     return null;
@@ -39,5 +47,22 @@ export function parseWorkerFailureEvent(payload: unknown, createdAt: Date): Work
       ? { providerMessageId: record.providerMessageId }
       : {}),
     ...(typeof record.queueMessageId === "string" ? { queueMessageId: record.queueMessageId } : {}),
+  };
+}
+
+export function readWorkerFailureSnapshot(input: WorkerFailureSnapshot): WorkerFailureEvent | null {
+  if (!input.latestWorkerFailureAt) {
+    return null;
+  }
+
+  return {
+    source: "worker_failure",
+    occurredAt: input.latestWorkerFailureAt.toISOString(),
+    reason: input.latestWorkerFailureReason,
+    retryable: input.latestWorkerFailureRetryable,
+    receiveCount: input.latestWorkerFailureReceiveCount,
+    failureDisposition: input.latestWorkerFailureDisposition,
+    fromStatus: "PROCESSING",
+    toStatus: "ERROR",
   };
 }

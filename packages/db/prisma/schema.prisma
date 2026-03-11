@@ -108,6 +108,11 @@ model Claim {
   processingAttempt Int             @default(0)
   processingLeaseToken String?
   processingLeaseClaimedAt DateTime?
+  latestWorkerFailureAt DateTime?
+  latestWorkerFailureReason String?
+  latestWorkerFailureRetryable Boolean?
+  latestWorkerFailureReceiveCount Int?
+  latestWorkerFailureDisposition String?
   createdByUserId String?
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
@@ -121,6 +126,10 @@ model Claim {
   @@unique([organizationId, externalClaimId])
   @@index([organizationId, status, createdAt])
   @@index([organizationId, status, updatedAt, id], map: "Claim_organizationId_status_updatedAt_id_idx")
+  @@index([organizationId, status, latestWorkerFailureAt, id], map: "Claim_error_failure_at_idx")
+  @@index([organizationId, status, latestWorkerFailureReceiveCount, updatedAt, id], map: "Claim_error_failure_count_idx")
+  @@index([organizationId, status, latestWorkerFailureRetryable, updatedAt, id], map: "Claim_error_retryable_idx")
+  @@index([organizationId, status, latestWorkerFailureDisposition, updatedAt, id], map: "Claim_error_disposition_idx")
   @@index([organizationId, createdAt, id], map: "Claim_organizationId_createdAt_id_idx")
 }
 

@@ -1,4 +1,8 @@
-import { prisma, recordProcessingRecoveryIfStale } from "@claimflow/db";
+import {
+  prisma,
+  CLAIM_PROCESSING_RECOVERY_SOURCES,
+  recordProcessingRecoveryIfStale,
+} from "@claimflow/db";
 import { randomUUID } from "node:crypto";
 import { enqueueClaimIngestJob } from "@/lib/queue/claims";
 import { getClaimProcessingStaleBefore, getClaimProcessingStaleMinutes } from "./processing-health";
@@ -95,7 +99,7 @@ export async function recoverStaleProcessingClaim(
       organizationId: input.organizationId,
       claimId: claim.id,
       actorUserId: input.actorUserId,
-      source: "manual_processing_recovery",
+      source: CLAIM_PROCESSING_RECOVERY_SOURCES.manualProcessingRecovery,
       staleBefore,
       touchedAt: now,
       queueMessageId: queueResult.messageId,

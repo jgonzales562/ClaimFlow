@@ -1,6 +1,7 @@
 import { prisma } from "@claimflow/db";
 import { CLAIM_STATUSES, type ClaimStatus } from "./filters";
 import { type DashboardOperationalActivity } from "./dashboard-claims";
+import { loadClaimOperationalActivity } from "./operational-activity";
 import { getClaimProcessingStaleBefore, getClaimProcessingStaleMinutes } from "./processing-health";
 
 export type ClaimsOperationsHealthSnapshot = {
@@ -11,7 +12,6 @@ export type ClaimsOperationsHealthSnapshot = {
   operationalActivity: DashboardOperationalActivity;
 };
 
-const HEALTH_ACTIVITY_WINDOW_HOURS = 24;
 const DEFAULT_MAX_STALE_PROCESSING_COUNT = 0;
 
 export async function loadClaimsOperationsHealthSnapshot(input: {
@@ -19,14 +19,11 @@ export async function loadClaimsOperationsHealthSnapshot(input: {
 } = {}): Promise<ClaimsOperationsHealthSnapshot> {
   const now = input.now ?? new Date();
   const staleProcessingBefore = getClaimProcessingStaleBefore(now);
-  const activitySince = new Date(now.getTime() - HEALTH_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000);
 
   const [
     groupedCounts,
     staleProcessingGroups,
-    watchdogRecoveryCount,
-    manualProcessingRecoveryCount,
-    manualRetryCount,
+    operationalActivity,
   ] = await Promise.all([
     prisma.claim.groupBy({
       by: ["status"],
@@ -46,41 +43,8 @@ export async function loadClaimsOperationsHealthSnapshot(input: {
         _all: true,
       },
     }),
-    prisma.claimEvent.count({
-      where: {
-        eventType: "STATUS_TRANSITION",
-        createdAt: {
-          gte: activitySince,
-        },
-        payload: {
-          path: ["source"],
-          equals: "watchdog_processing_recovery",
-        },
-      },
-    }),
-    prisma.claimEvent.count({
-      where: {
-        eventType: "STATUS_TRANSITION",
-        createdAt: {
-          gte: activitySince,
-        },
-        payload: {
-          path: ["source"],
-          equals: "manual_processing_recovery",
-        },
-      },
-    }),
-    prisma.claimEvent.count({
-      where: {
-        eventType: "STATUS_TRANSITION",
-        createdAt: {
-          gte: activitySince,
-        },
-        payload: {
-          path: ["source"],
-          equals: "manual_retry",
-        },
-      },
+    loadClaimOperationalActivity({
+      now,
     }),
   ]);
 
@@ -100,12 +64,7 @@ export async function loadClaimsOperationsHealthSnapshot(input: {
       0,
     ),
     staleProcessingOrganizationCount: staleProcessingGroups.length,
-    operationalActivity: {
-      windowHours: HEALTH_ACTIVITY_WINDOW_HOURS,
-      watchdogRecoveryCount,
-      manualProcessingRecoveryCount,
-      manualRetryCount,
-    },
+    operationalActivity,
   };
 }
 

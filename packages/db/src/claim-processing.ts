@@ -1,11 +1,21 @@
 import type { ClaimStatus, Prisma } from "@prisma/client";
 import { recordClaimStatusTransition } from "./claim-status.js";
 
-export type ClaimProcessingRecoverySource =
-  | "manual_processing_recovery"
-  | "watchdog_processing_recovery";
+export const CLAIM_PROCESSING_RECOVERY_SOURCES = {
+  manualProcessingRecovery: "manual_processing_recovery",
+  watchdogProcessingRecovery: "watchdog_processing_recovery",
+} as const;
 
-export type ClaimProcessingStartSource = "webhook_enqueue" | "manual_retry";
+export const CLAIM_PROCESSING_START_SOURCES = {
+  webhookEnqueue: "webhook_enqueue",
+  manualRetry: "manual_retry",
+} as const;
+
+export type ClaimProcessingRecoverySource =
+  (typeof CLAIM_PROCESSING_RECOVERY_SOURCES)[keyof typeof CLAIM_PROCESSING_RECOVERY_SOURCES];
+
+export type ClaimProcessingStartSource =
+  (typeof CLAIM_PROCESSING_START_SOURCES)[keyof typeof CLAIM_PROCESSING_START_SOURCES];
 
 export async function startClaimProcessingAttemptIfCurrent(input: {
   tx: Prisma.TransactionClient;

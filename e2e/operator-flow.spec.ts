@@ -184,6 +184,80 @@ test.describe("admin claim operator flows", () => {
     ).toBeVisible();
   });
 
+  test("admin can filter and prioritize the exception queue", async ({
+    page,
+  }) => {
+    test.setTimeout(90_000);
+
+    await Promise.all([
+      page.waitForURL(/\/dashboard\/errors(?:\?|$)/),
+      page.getByRole("link", { name: "Error Triage" }).click(),
+    ]);
+
+    await page.getByLabel("Retryability").selectOption("retryable");
+    await Promise.all([
+      page.waitForURL(
+        (url) =>
+          url.pathname === "/dashboard/errors" &&
+          url.searchParams.get("retryability") === "retryable",
+      ),
+      page.getByRole("button", { name: "Refresh" }).click(),
+    ]);
+
+    await expect(page.getByRole("row", { name: /seed-claim-006/i })).toBeVisible();
+    await expect(page.getByRole("row", { name: /seed-claim-004/i })).toHaveCount(0);
+    await expect(page.getByRole("row", { name: /seed-claim-006/i }).getByText("Yes")).toBeVisible();
+
+    await page.getByLabel("Retryability").selectOption("");
+    await page.getByLabel("Failure Disposition").selectOption("moved_to_dlq");
+    await Promise.all([
+      page.waitForURL(
+        (url) =>
+          url.pathname === "/dashboard/errors" &&
+          url.searchParams.get("failure_disposition") === "moved_to_dlq",
+      ),
+      page.getByRole("button", { name: "Refresh" }).click(),
+    ]);
+
+    await expect(page.getByRole("row", { name: /seed-claim-004/i })).toBeVisible();
+    await expect(page.getByRole("row", { name: /seed-claim-006/i })).toHaveCount(0);
+    await expect(
+      page.getByRole("row", { name: /seed-claim-004/i }).getByText("Moved To Dlq"),
+    ).toBeVisible();
+
+    await page.getByLabel("Search").fill("seed-claim-00");
+    await page.getByLabel("Failure Disposition").selectOption("");
+    await page.getByLabel("Sort").selectOption("receive_count_desc");
+    await Promise.all([
+      page.waitForURL(
+        (url) =>
+          url.pathname === "/dashboard/errors" &&
+          url.searchParams.get("sort") === "receive_count_desc" &&
+          url.searchParams.get("search") === "seed-claim-00",
+      ),
+      page.getByRole("button", { name: "Refresh" }).click(),
+    ]);
+
+    const firstClaimRow = page.locator("tbody tr").first();
+    await expect(firstClaimRow).toContainText("seed-claim-004");
+    await expect(firstClaimRow).toContainText("4");
+
+    await page.getByLabel("Sort").selectOption("failure_oldest_first");
+    await Promise.all([
+      page.waitForURL(
+        (url) =>
+          url.pathname === "/dashboard/errors" &&
+          url.searchParams.get("sort") === "failure_oldest_first" &&
+          url.searchParams.get("search") === "seed-claim-00",
+      ),
+      page.getByRole("button", { name: "Refresh" }).click(),
+    ]);
+
+    const oldestFailureRow = page.locator("tbody tr").first();
+    await expect(oldestFailureRow).toContainText("seed-claim-006");
+    await expect(oldestFailureRow).toContainText("OpenAI extraction request timed out before completion.");
+  });
+
   test("admin can see retry controls for retryable error claims", async ({ page }) => {
     test.setTimeout(90_000);
 

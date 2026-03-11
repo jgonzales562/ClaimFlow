@@ -63,6 +63,11 @@ export async function markClaimAsError(
         status: "ERROR",
         processingLeaseToken: null,
         processingLeaseClaimedAt: null,
+        latestWorkerFailureAt: new Date(),
+        latestWorkerFailureReason: input.reason,
+        latestWorkerFailureRetryable: input.retryable,
+        latestWorkerFailureReceiveCount: input.receiveCount,
+        latestWorkerFailureDisposition: input.failureDisposition,
       },
     });
 

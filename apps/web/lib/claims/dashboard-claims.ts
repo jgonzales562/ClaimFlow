@@ -12,6 +12,7 @@ import {
   type ClaimFilters,
   type ClaimStatus,
 } from "./filters";
+import { loadClaimOperationalActivity, type ClaimOperationalActivity } from "./operational-activity";
 import { getClaimProcessingStaleBefore, isClaimProcessingStale } from "./processing-health";
 
 export type DashboardClaimRecord = {
@@ -28,12 +29,7 @@ export type DashboardClaimRecord = {
 
 export type DashboardStatusCounts = Record<ClaimStatus, number>;
 
-export type DashboardOperationalActivity = {
-  windowHours: number;
-  watchdogRecoveryCount: number;
-  manualProcessingRecoveryCount: number;
-  manualRetryCount: number;
-};
+export type DashboardOperationalActivity = ClaimOperationalActivity;
 
 export type DashboardOperationalSummary = {
   totalClaims: number;
@@ -49,8 +45,6 @@ export type DashboardClaimsPage = DashboardOperationalSummary & {
 };
 
 const DEFAULT_DASHBOARD_PAGE_SIZE = 100;
-const DASHBOARD_ACTIVITY_WINDOW_HOURS = 24;
-
 const dashboardOrderByDesc: Prisma.ClaimOrderByWithRelationInput[] = [
   { createdAt: "desc" },
   { id: "desc" },
@@ -142,14 +136,11 @@ export async function loadDashboardOperationalSummary(input: {
 }): Promise<DashboardOperationalSummary> {
   const now = input.now ?? new Date();
   const staleProcessingBefore = getClaimProcessingStaleBefore(now);
-  const activitySince = new Date(now.getTime() - DASHBOARD_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000);
 
   const [
     groupedCounts,
     staleProcessingCount,
-    watchdogRecoveryCount,
-    manualProcessingRecoveryCount,
-    manualRetryCount,
+    operationalActivity,
   ] = await Promise.all([
     prisma.claim.groupBy({
       by: ["status"],
@@ -169,44 +160,9 @@ export async function loadDashboardOperationalSummary(input: {
         },
       },
     }),
-    prisma.claimEvent.count({
-      where: {
-        organizationId: input.organizationId,
-        eventType: "STATUS_TRANSITION",
-        createdAt: {
-          gte: activitySince,
-        },
-        payload: {
-          path: ["source"],
-          equals: "watchdog_processing_recovery",
-        },
-      },
-    }),
-    prisma.claimEvent.count({
-      where: {
-        organizationId: input.organizationId,
-        eventType: "STATUS_TRANSITION",
-        createdAt: {
-          gte: activitySince,
-        },
-        payload: {
-          path: ["source"],
-          equals: "manual_processing_recovery",
-        },
-      },
-    }),
-    prisma.claimEvent.count({
-      where: {
-        organizationId: input.organizationId,
-        eventType: "STATUS_TRANSITION",
-        createdAt: {
-          gte: activitySince,
-        },
-        payload: {
-          path: ["source"],
-          equals: "manual_retry",
-        },
-      },
+    loadClaimOperationalActivity({
+      organizationId: input.organizationId,
+      now,
     }),
   ]);
 
@@ -222,11 +178,6 @@ export async function loadDashboardOperationalSummary(input: {
     totalClaims: groupedCounts.reduce((sum, entry) => sum + entry._count._all, 0),
     statusCounts,
     staleProcessingCount,
-    operationalActivity: {
-      windowHours: DASHBOARD_ACTIVITY_WINDOW_HOURS,
-      watchdogRecoveryCount,
-      manualProcessingRecoveryCount,
-      manualRetryCount,
-    },
+    operationalActivity,
   };
 }
