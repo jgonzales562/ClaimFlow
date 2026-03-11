@@ -13,7 +13,7 @@
     "prisma:migrate:dev": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:migrate:status": "prisma migrate status",
-    "seed": "prisma generate && tsx prisma/seed.ts"
+    "seed": "node scripts/seed.mjs"
   },
   "dependencies": {
     "@prisma/client": "^6.4.1"
