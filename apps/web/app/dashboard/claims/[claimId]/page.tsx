@@ -84,8 +84,9 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
   });
 
   return (
-    <main className="app-shell page-stack">
+    <main className="app-shell app-shell--ops page-stack">
       <PageHero
+        compact
         eyebrow="Claim workspace"
         title="Claim Review"
         subtitle="Review extracted details, capture missing information, and keep the claim moving with a complete audit trail."
@@ -93,7 +94,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
         breadcrumbLabel="Back to dashboard"
         meta={
           <>
-            <span className="hero-chip">{claimReference}</span>
+            <span className="hero-chip mono-text">{claimReference}</span>
             <Pill tone={getClaimStatusTone(claim.status)}>{formatTokenLabel(claim.status)}</Pill>
             <Pill tone={getWarrantyTone(claim.warrantyStatus)}>
               {formatTokenLabel(claim.warrantyStatus)}
@@ -124,7 +125,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
         />
       </section>
 
-      <section className="content-grid">
+      <section className="content-grid content-grid--workspace">
         <div className="side-stack">
           <PanelSection
             kicker="Editable fields"
@@ -317,7 +318,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
           </PanelSection>
         </div>
 
-        <div className="side-stack">
+        <div className="side-stack side-stack--sticky">
           <PanelSection
             kicker="Review posture"
             title="Current operating signal"
@@ -399,7 +400,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
             copy="Core identifiers and intake metadata for this claim record."
           >
             <div className="kv-grid">
-              <KeyValueRow label="Claim ID" value={claimReference} />
+              <KeyValueRow label="Claim ID" value={<span className="mono-text">{claimReference}</span>} />
               <KeyValueRow label="Source Email" value={claim.sourceEmail ?? "-"} />
               <KeyValueRow
                 label="Purchase Date"
@@ -410,14 +411,24 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 label="Lease Claimed"
                 value={
                   claim.processingLeaseClaimedAt
-                    ? formatUtcDateTime(claim.processingLeaseClaimedAt)
+                    ? (
+                        <span className="mono-text mono-text--quiet">
+                          {formatUtcDateTime(claim.processingLeaseClaimedAt)}
+                        </span>
+                      )
                     : claim.status === "PROCESSING" && claim.processingLeaseToken
                       ? "Pending worker claim"
                       : "-"
                 }
               />
-              <KeyValueRow label="Created" value={formatUtcDateTime(claim.createdAt)} />
-              <KeyValueRow label="Updated" value={formatUtcDateTime(claim.updatedAt)} />
+              <KeyValueRow
+                label="Created"
+                value={<span className="mono-text mono-text--quiet">{formatUtcDateTime(claim.createdAt)}</span>}
+              />
+              <KeyValueRow
+                label="Updated"
+                value={<span className="mono-text mono-text--quiet">{formatUtcDateTime(claim.updatedAt)}</span>}
+              />
             </div>
           </PanelSection>
 
@@ -475,7 +486,7 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 </tr>
               ) : (
                 claim.attachments.map((attachment) => (
-                  <tr key={attachment.id}>
+                  <tr key={attachment.id} className="data-row data-row--neutral">
                     <td data-label="Filename">
                       <div>{attachment.originalFilename}</div>
                       <span className="subtle-text">
@@ -484,7 +495,11 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                     </td>
                     <td data-label="Type">{attachment.contentType ?? "-"}</td>
                     <td data-label="Size">{formatClaimAttachmentBytes(attachment.byteSize)}</td>
-                    <td data-label="Uploaded">{formatUtcDateTime(attachment.createdAt)}</td>
+                    <td data-label="Uploaded">
+                      <span className="mono-text mono-text--quiet">
+                        {formatUtcDateTime(attachment.createdAt)}
+                      </span>
+                    </td>
                     <td data-label="Actions">
                       {attachment.uploadStatus === "STORED" ? (
                         <div className="cluster">
@@ -541,8 +556,12 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 </tr>
               ) : (
                 claim.events.map((event) => (
-                  <tr key={event.id}>
-                    <td data-label="Time">{formatUtcDateTime(event.createdAt)}</td>
+                  <tr key={event.id} className={`data-row data-row--${getClaimEventTone(event.eventType)}`}>
+                    <td data-label="Time">
+                      <span className="mono-text mono-text--quiet">
+                        {formatUtcDateTime(event.createdAt)}
+                      </span>
+                    </td>
                     <td data-label="Type">
                       <Pill tone={getClaimEventTone(event.eventType)}>
                         {formatTokenLabel(event.eventType)}

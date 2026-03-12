@@ -134,8 +134,9 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
   ];
 
   return (
-    <main className="app-shell app-shell--wide page-stack">
+    <main className="app-shell app-shell--wide app-shell--ops page-stack">
       <PageHero
+        compact
         eyebrow="Exception handling"
         title="Error Claim Triage"
         subtitle="Review failed claims, inspect the failure reason, and move anything retryable back into the queue with context."
@@ -356,14 +357,14 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                 </tr>
               ) : (
                 payload.claims.map((claim) => (
-                  <tr key={claim.id}>
+                  <tr key={claim.id} className="data-row data-row--danger">
                     <td data-label="Claim">
                       <div className="cluster">
                         <Pill tone={getClaimStatusTone(claim.status)}>
                           {formatTokenLabel(claim.status)}
                         </Pill>
                       </div>
-                      <span className="subtle-text">
+                      <span className="subtle-text mono-text">
                         {formatClaimReference(claim.externalClaimId, claim.id)}
                       </span>
                     </td>
@@ -372,11 +373,15 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                       <span className="subtle-text">{claim.productName ?? "-"}</span>
                     </td>
                     <td data-label="Updated">
-                      <div>{formatUtcDateTime(claim.updatedAt)}</div>
+                      <div className="mono-text mono-text--quiet">
+                        {formatUtcDateTime(claim.updatedAt)}
+                      </div>
                       <span className="subtle-text">{claim.sourceEmail ?? "-"}</span>
                     </td>
                     <td data-label="Attempt">
-                      <div>{formatClaimProcessingAttempt(claim.status, claim.processingAttempt)}</div>
+                      <div className="mono-text">
+                        {formatClaimProcessingAttempt(claim.status, claim.processingAttempt)}
+                      </div>
                     </td>
                     <td data-label="Failure Reason">
                       <div>{claim.failure?.reason ?? "-"}</div>
@@ -393,10 +398,14 @@ export default async function ErrorClaimsPage({ searchParams }: ErrorClaimsPageP
                             : "No"}
                       </Pill>
                     </td>
-                    <td data-label="Receive Count">{claim.failure?.receiveCount ?? "-"}</td>
+                    <td data-label="Receive Count">
+                      <span className="mono-text">
+                        {claim.failure?.receiveCount ?? "-"}
+                      </span>
+                    </td>
                     <td data-label="Disposition">
                       {claim.failure?.failureDisposition ? (
-                        <span className="subtle-text">
+                        <span className="subtle-text mono-text">
                           {formatTokenLabel(claim.failure.failureDisposition)}
                         </span>
                       ) : (

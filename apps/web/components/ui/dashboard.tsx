@@ -6,6 +6,7 @@ type PageHeroProps = {
   eyebrow: string;
   title: string;
   subtitle: ReactNode;
+  compact?: boolean;
   breadcrumbHref?: string;
   breadcrumbLabel?: string;
   meta?: ReactNode;
@@ -64,6 +65,7 @@ export function PageHero({
   eyebrow,
   title,
   subtitle,
+  compact = false,
   breadcrumbHref,
   breadcrumbLabel,
   meta,
@@ -71,7 +73,7 @@ export function PageHero({
   actions,
 }: PageHeroProps) {
   return (
-    <section className="hero-card">
+    <section className={cx("hero-card", compact && "hero-card--compact")}>
       <div>
         {breadcrumbHref && breadcrumbLabel ? (
           <p className="hero-breadcrumb">

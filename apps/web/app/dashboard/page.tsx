@@ -106,8 +106,9 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
   const jsonExportHref = buildClaimsExportHref(filters, "json", 1000);
 
   return (
-    <main className="app-shell app-shell--wide page-stack">
+    <main className="app-shell app-shell--wide app-shell--ops page-stack">
       <PageHero
+        compact
         eyebrow="Claims operations"
         title="ClaimFlow Dashboard"
         subtitle={`Monitor intake volume, review readiness, and exceptions across ${auth.organizationName}.`}
@@ -392,9 +393,12 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                 </tr>
               ) : (
                 claims.map((claim) => (
-                  <tr key={claim.id}>
+                  <tr
+                    key={claim.id}
+                    className={`data-row data-row--${claim.isProcessingStale ? "warning" : getClaimStatusTone(claim.status)}`}
+                  >
                     <td data-label="Claim ID">
-                      <Link href={`/dashboard/claims/${claim.id}`} className="table-link">
+                      <Link href={`/dashboard/claims/${claim.id}`} className="table-link mono-text">
                         {formatClaimReference(claim.externalClaimId, claim.id)}
                       </Link>
                     </td>
@@ -413,8 +417,16 @@ export default async function DashboardPage({ searchParams }: DashboardPageProps
                         {formatTokenLabel(claim.warrantyStatus)}
                       </Pill>
                     </td>
-                    <td data-label="Created">{formatDateInput(claim.createdAt)}</td>
-                    <td data-label="Updated">{formatDateInput(claim.updatedAt)}</td>
+                    <td data-label="Created">
+                      <span className="mono-text mono-text--quiet">
+                        {formatDateInput(claim.createdAt)}
+                      </span>
+                    </td>
+                    <td data-label="Updated">
+                      <span className="mono-text mono-text--quiet">
+                        {formatDateInput(claim.updatedAt)}
+                      </span>
+                    </td>
                   </tr>
                 ))
               )}
