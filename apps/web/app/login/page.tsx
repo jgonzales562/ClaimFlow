@@ -4,6 +4,27 @@ type LoginPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
+const loginHighlights = [
+  {
+    title: "Structured intake",
+    copy: "Review incoming claim emails, attachments, and extracted fields from one controlled workspace.",
+  },
+  {
+    title: "Analyst workflow",
+    copy: "Move claims through review, exception handling, and readiness decisions without leaving an audit trail gap.",
+  },
+  {
+    title: "Operational recovery",
+    copy: "Inspect failures, retry eligible claims, and recover stalled processing with role-scoped controls.",
+  },
+] as const;
+
+const loginAssurances = [
+  "Organization-scoped access",
+  "Role-based review controls",
+  "Audited workflow changes",
+] as const;
+
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const error = resolvedSearchParams.error;
@@ -13,46 +34,59 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
     <main className="login-shell">
       <section className="login-layout">
         <div className="login-hero">
-          <div>
-            <p className="eyebrow">Claim operations platform</p>
-            <h1 className="login-lead">Warranty claims without the inbox chaos.</h1>
-            <p className="login-copy">
-              ClaimFlow gives operations teams a cleaner way to intake, review, and resolve claims
-              while keeping every attachment, edit, and status change traceable.
-            </p>
+          <div className="login-hero-top">
+            <div>
+              <p className="eyebrow">Claims operations workspace</p>
+              <h1 className="login-lead">Secure access to intake, review, and exception handling.</h1>
+              <p className="login-copy">
+                ClaimFlow is built for teams working live warranty queues. Access stays scoped to
+                organization membership, role permissions, and auditable workflow actions.
+              </p>
+            </div>
+
+            <div className="login-context-grid">
+              {loginAssurances.map((assurance) => (
+                <article key={assurance} className="login-context-card">
+                  <p className="login-context-label">{assurance}</p>
+                </article>
+              ))}
+            </div>
           </div>
 
           <div className="feature-list">
-            <article className="feature-item">
-              <h2 className="feature-title">Centralized intake</h2>
-              <p className="feature-copy">
-                Bring claim emails, documents, and extracted fields into a single working queue.
-              </p>
-            </article>
-            <article className="feature-item">
-              <h2 className="feature-title">Faster review cycles</h2>
-              <p className="feature-copy">
-                Surface missing information and warranty signals so analysts can focus on decisions,
-                not cleanup.
-              </p>
-            </article>
-            <article className="feature-item">
-              <h2 className="feature-title">Defensible audit history</h2>
-              <p className="feature-copy">
-                Preserve status transitions, user edits, and supporting files from intake through
-                resolution.
-              </p>
-            </article>
+            {loginHighlights.map((item) => (
+              <article key={item.title} className="feature-item">
+                <h2 className="feature-title">{item.title}</h2>
+                <p className="feature-copy">{item.copy}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className="login-trust-note">
+            <p className="login-trust-kicker">Why it matters</p>
+            <p className="login-trust-copy">
+              Operators need a queue they can trust. ClaimFlow keeps the working record, supporting
+              files, retries, and status transitions in one place instead of spreading them across
+              inboxes, ad hoc notes, and manual follow-up.
+            </p>
           </div>
         </div>
 
         <section className="surface-card login-panel">
-          <div className="section-heading">
+          <div className="login-panel-head">
             <div>
-              <p className="section-kicker">Access</p>
+              <p className="section-kicker">Workspace access</p>
               <h2 className="section-title">Sign in to ClaimFlow</h2>
               <p className="section-copy">
-                Use your organization credentials to enter the claims workspace.
+                Use your organization credentials to open the live claims workspace.
+              </p>
+            </div>
+
+            <div className="login-access-note">
+              <p className="login-access-label">Access policy</p>
+              <p className="login-access-copy">
+                Sessions are limited by organization membership and the permissions attached to your
+                role.
               </p>
             </div>
           </div>
@@ -96,14 +130,20 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </form>
 
           <p className="dev-hint">
-            Seeded development account: <code>admin@claimflow.local</code> / <code>Moonbeem7!</code>
+            Development access: <code>admin@claimflow.local</code> / <code>Moonbeem7!</code>
           </p>
 
-          <p className="copy-reset">
-            <Link href="/" className="inline-link">
-              Back to home
-            </Link>
-          </p>
+          <div className="login-footer">
+            <p className="copy-reset subtle-text">
+              Every manual edit, status transition, retry, and recovery action remains auditable
+              after sign-in.
+            </p>
+            <p className="copy-reset">
+              <Link href="/" className="inline-link">
+                Back to home
+              </Link>
+            </p>
+          </div>
         </section>
       </section>
     </main>

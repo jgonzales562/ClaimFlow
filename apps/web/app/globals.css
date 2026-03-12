@@ -906,11 +906,13 @@ textarea.control {
 .login-hero {
   position: relative;
   display: grid;
-  gap: 24px;
+  gap: 22px;
   padding: 40px;
   border-radius: 36px;
   overflow: hidden;
-  background: linear-gradient(135deg, rgba(7, 18, 34, 0.95), rgba(14, 74, 78, 0.9));
+  background:
+    linear-gradient(135deg, rgba(7, 18, 34, 0.96), rgba(11, 53, 66, 0.92)),
+    radial-gradient(circle at top right, rgba(97, 212, 201, 0.12), transparent 42%);
   color: #fff;
   box-shadow: 0 30px 60px rgba(7, 14, 28, 0.2);
 }
@@ -930,31 +932,60 @@ textarea.control {
   z-index: 1;
 }
 
+.login-hero-top {
+  display: grid;
+  gap: 18px;
+}
+
 .login-lead {
   margin: 0;
-  max-width: 11ch;
-  font-size: clamp(2.3rem, 6vw, 4rem);
-  line-height: 0.95;
-  letter-spacing: -0.07em;
+  max-width: 13ch;
+  font-size: clamp(2.2rem, 5.7vw, 3.7rem);
+  line-height: 0.98;
+  letter-spacing: -0.06em;
 }
 
 .login-copy {
-  margin: 0;
-  max-width: 58ch;
+  margin: 12px 0 0;
+  max-width: 64ch;
   color: rgba(233, 240, 248, 0.82);
-  line-height: 1.7;
+  line-height: 1.68;
+}
+
+.login-context-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.login-context-card {
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(8px);
+}
+
+.login-context-label {
+  margin: 0;
+  font-size: 0.8rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(239, 244, 250, 0.88);
 }
 
 .feature-item {
-  padding: 16px 18px;
-  border: 1px solid rgba(255, 255, 255, 0.14);
-  border-radius: 20px;
-  background: rgba(255, 255, 255, 0.1);
+  padding: 16px 18px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .feature-title {
   margin: 0;
   font-weight: 800;
+  letter-spacing: -0.02em;
 }
 
 .feature-copy {
@@ -963,17 +994,66 @@ textarea.control {
   line-height: 1.6;
 }
 
+.login-trust-note {
+  display: grid;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.login-trust-kicker,
+.login-access-label {
+  margin: 0;
+  font-size: 0.74rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.login-trust-kicker {
+  color: rgba(182, 230, 223, 0.82);
+}
+
+.login-trust-copy {
+  margin: 0;
+  max-width: 62ch;
+  color: rgba(233, 240, 248, 0.74);
+  line-height: 1.65;
+}
+
 .login-panel {
   padding: 32px;
 }
 
+.login-panel-head {
+  display: grid;
+  gap: 18px;
+}
+
+.login-access-note {
+  padding: 14px 16px;
+  border: 1px solid rgba(35, 54, 79, 0.1);
+  border-radius: 18px;
+  background: rgba(244, 248, 251, 0.86);
+}
+
+.login-access-copy {
+  margin: 6px 0 0;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
 .dev-hint {
   padding: 14px 16px;
-  border: 1px solid rgba(18, 117, 109, 0.14);
+  border: 1px solid rgba(35, 54, 79, 0.1);
   border-radius: 18px;
-  background: rgba(18, 117, 109, 0.08);
+  background: rgba(246, 249, 252, 0.92);
   color: var(--ink);
   line-height: 1.6;
+}
+
+.login-footer {
+  display: grid;
+  gap: 10px;
 }
 
 @keyframes rise-in {
@@ -1050,6 +1130,10 @@ textarea.control {
   .side-stack--sticky {
     position: static;
   }
+
+  .login-context-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 820px) {
@@ -1097,6 +1181,10 @@ textarea.control {
   .claim-field-grid,
   .summary-strip,
   .glance-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .login-context-grid {
     grid-template-columns: 1fr;
   }
 
