@@ -97,6 +97,9 @@ bash -lc 'set -a && source .env && set +a && pnpm --filter @claimflow/worker dev
 - `pnpm test:smoke`
 - `pnpm test:e2e`
 - `pnpm ops:check-health`
+- `pnpm db:migrate:deploy`
+- `pnpm db:seed`
+- `pnpm db:local:start`
 - `pnpm db:local:status`
 - `pnpm db:local:restart`
 
@@ -117,6 +120,8 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 - `CLAIMS_INGEST_DLQ_URL`
 - `CLAIMS_PROCESSING_STALE_MINUTES`
 - `CLAIMS_PROCESSING_WATCHDOG_ENABLED`
+- `CLAIMS_PROCESSING_WATCHDOG_INTERVAL_MS`
+- `CLAIMS_PROCESSING_WATCHDOG_BATCH_SIZE`
 - `OPENAI_API_KEY`
 - `SENTRY_DSN`
 - `CLAIMS_HEALTH_BEARER_TOKEN`
@@ -138,8 +143,7 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 
 ## CI
 
-GitHub Actions runs:
+GitHub Actions includes:
 
-- `pnpm lint`
-- `pnpm typecheck`
-- `pnpm build`
+- `CI` on push to `main` and pull requests, running `pnpm lint`, `pnpm typecheck`, and `pnpm build`
+- `Claims Health` on a 10-minute schedule and manual dispatch when `CLAIMS_HEALTHCHECK_URL` and `CLAIMS_HEALTH_BEARER_TOKEN` repo secrets are configured
