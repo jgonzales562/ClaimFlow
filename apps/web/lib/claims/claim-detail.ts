@@ -57,96 +57,99 @@ export async function loadClaimDetail(input: {
   organizationId: string;
   claimId: string;
 }): Promise<ClaimDetailRecord | null> {
-  const [claim, storedAttachmentCount] = await Promise.all([
-    prisma.claim.findFirst({
-      where: {
-        id: input.claimId,
-        organizationId: input.organizationId,
+  const claim = await prisma.claim.findFirst({
+    where: {
+      id: input.claimId,
+      organizationId: input.organizationId,
+    },
+    select: {
+      id: true,
+      externalClaimId: true,
+      sourceEmail: true,
+      customerName: true,
+      productName: true,
+      serialNumber: true,
+      purchaseDate: true,
+      issueSummary: true,
+      retailer: true,
+      warrantyStatus: true,
+      missingInfo: true,
+      status: true,
+      processingAttempt: true,
+      processingLeaseToken: true,
+      processingLeaseClaimedAt: true,
+      latestWorkerFailureAt: true,
+      latestWorkerFailureReason: true,
+      latestWorkerFailureRetryable: true,
+      latestWorkerFailureReceiveCount: true,
+      latestWorkerFailureDisposition: true,
+      createdAt: true,
+      updatedAt: true,
+      attachments: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: CLAIM_DETAIL_ATTACHMENT_LIMIT,
+        select: {
+          id: true,
+          uploadStatus: true,
+          originalFilename: true,
+          contentType: true,
+          byteSize: true,
+          createdAt: true,
+        },
       },
-      select: {
-        id: true,
-        externalClaimId: true,
-        sourceEmail: true,
-        customerName: true,
-        productName: true,
-        serialNumber: true,
-        purchaseDate: true,
-        issueSummary: true,
-        retailer: true,
-        warrantyStatus: true,
-        missingInfo: true,
-        status: true,
-        processingAttempt: true,
-        processingLeaseToken: true,
-        processingLeaseClaimedAt: true,
-        latestWorkerFailureAt: true,
-        latestWorkerFailureReason: true,
-        latestWorkerFailureRetryable: true,
-        latestWorkerFailureReceiveCount: true,
-        latestWorkerFailureDisposition: true,
-        createdAt: true,
-        updatedAt: true,
-        attachments: {
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take: CLAIM_DETAIL_ATTACHMENT_LIMIT,
-          select: {
-            id: true,
-            uploadStatus: true,
-            originalFilename: true,
-            contentType: true,
-            byteSize: true,
-            createdAt: true,
-          },
+      extractions: {
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: 1,
+        select: {
+          provider: true,
+          model: true,
+          confidence: true,
+          extraction: true,
+          createdAt: true,
         },
-        extractions: {
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take: 1,
-          select: {
-            provider: true,
-            model: true,
-            confidence: true,
-            extraction: true,
-            createdAt: true,
-          },
+      },
+      events: {
+        where: {
+          organizationId: input.organizationId,
         },
-        events: {
-          where: {
-            organizationId: input.organizationId,
-          },
-          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-          take: CLAIM_DETAIL_EVENT_LIMIT,
-          select: {
-            id: true,
-            eventType: true,
-            payload: true,
-            createdAt: true,
-            actorUser: {
-              select: {
-                email: true,
-                fullName: true,
-              },
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        take: CLAIM_DETAIL_EVENT_LIMIT,
+        select: {
+          id: true,
+          eventType: true,
+          payload: true,
+          createdAt: true,
+          actorUser: {
+            select: {
+              email: true,
+              fullName: true,
             },
           },
         },
       },
-    }),
-    prisma.claimAttachment.count({
-      where: {
-        organizationId: input.organizationId,
-        claimId: input.claimId,
-        uploadStatus: "STORED",
+      _count: {
+        select: {
+          attachments: {
+            where: {
+              organizationId: input.organizationId,
+              uploadStatus: "STORED",
+            },
+          },
+        },
       },
-    }),
-  ]);
+    },
+  });
 
   if (!claim) {
     return null;
   }
 
+  const { _count, ...claimRecord } = claim;
+
   return {
-    ...claim,
-    isProcessingStale: isClaimProcessingStale(claim.status, claim.updatedAt),
-    storedAttachmentCount,
-    latestFailure: readWorkerFailureSnapshot(claim),
+    ...claimRecord,
+    isProcessingStale: isClaimProcessingStale(claimRecord.status, claimRecord.updatedAt),
+    storedAttachmentCount: _count.attachments,
+    latestFailure: readWorkerFailureSnapshot(claimRecord),
   };
 }

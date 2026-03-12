@@ -1,8 +1,8 @@
-import { prisma } from "@claimflow/db";
-import { CLAIM_STATUSES, type ClaimStatus } from "./filters";
+import type { ClaimStatus } from "./filters";
 import { type DashboardOperationalActivity } from "./dashboard-claims";
 import { loadClaimOperationalActivity } from "./operational-activity";
 import { getClaimProcessingStaleBefore, getClaimProcessingStaleMinutes } from "./processing-health";
+import { loadClaimStatusSummary } from "./status-summary";
 
 export type ClaimsOperationsHealthSnapshot = {
   totalClaims: number;
@@ -21,49 +21,22 @@ export async function loadClaimsOperationsHealthSnapshot(input: {
   const staleProcessingBefore = getClaimProcessingStaleBefore(now);
 
   const [
-    groupedCounts,
-    staleProcessingGroups,
+    statusSummary,
     operationalActivity,
   ] = await Promise.all([
-    prisma.claim.groupBy({
-      by: ["status"],
-      _count: {
-        _all: true,
-      },
-    }),
-    prisma.claim.groupBy({
-      by: ["organizationId"],
-      where: {
-        status: "PROCESSING",
-        updatedAt: {
-          lte: staleProcessingBefore,
-        },
-      },
-      _count: {
-        _all: true,
-      },
+    loadClaimStatusSummary({
+      staleProcessingBefore,
     }),
     loadClaimOperationalActivity({
       now,
     }),
   ]);
 
-  const statusCounts = Object.fromEntries(
-    CLAIM_STATUSES.map((status) => [status, 0]),
-  ) as Record<ClaimStatus, number>;
-
-  for (const entry of groupedCounts) {
-    statusCounts[entry.status] = entry._count._all;
-  }
-
   return {
-    totalClaims: groupedCounts.reduce((sum, entry) => sum + entry._count._all, 0),
-    statusCounts,
-    staleProcessingCount: staleProcessingGroups.reduce(
-      (sum, entry) => sum + entry._count._all,
-      0,
-    ),
-    staleProcessingOrganizationCount: staleProcessingGroups.length,
+    totalClaims: statusSummary.totalClaims,
+    statusCounts: statusSummary.statusCounts,
+    staleProcessingCount: statusSummary.staleProcessingCount,
+    staleProcessingOrganizationCount: statusSummary.staleProcessingOrganizationCount,
     operationalActivity,
   };
 }

@@ -1,11 +1,7 @@
 import { prisma } from "@claimflow/db";
 import { Prisma } from "@prisma/client";
-import {
-  applyTimestampCursor,
-  parsePageDirection,
-  type PageDirection,
-} from "./cursor-pagination";
-import { buildClaimWhereInput, type ClaimFilters } from "./filters";
+import { parsePageDirection, type PageDirection } from "./cursor-pagination";
+import type { ClaimFilters } from "./filters";
 import { readWorkerFailureSnapshot, type WorkerFailureEvent } from "./worker-failure";
 
 export type ErrorClaimRecord = {
@@ -70,16 +66,22 @@ type ErrorClaimRow = {
   failureReceiveCount: number;
   failureOccurredAt: Date;
 };
-
-const errorClaimsOrderByDesc: Prisma.ClaimOrderByWithRelationInput[] = [
-  { updatedAt: "desc" },
-  { id: "desc" },
-];
-
-const errorClaimsOrderByAsc: Prisma.ClaimOrderByWithRelationInput[] = [
-  { updatedAt: "asc" },
-  { id: "asc" },
-];
+type ErrorClaimPageRow = ErrorClaimRow & {
+  totalCount: number;
+  externalClaimId: string | null;
+  sourceEmail: string | null;
+  customerName: string | null;
+  productName: string | null;
+  status: string;
+  warrantyStatus: string;
+  processingAttempt: number;
+  latestWorkerFailureAt: Date | null;
+  latestWorkerFailureReason: string | null;
+  latestWorkerFailureRetryable: boolean | null;
+  latestWorkerFailureReceiveCount: number | null;
+  latestWorkerFailureDisposition: string | null;
+  createdAt: Date;
+};
 
 export async function listErrorClaims(input: {
   organizationId: string;
@@ -96,14 +98,6 @@ export async function listErrorClaims(input: {
   nextCursor: string | null;
   prevCursor: string | null;
 }> {
-  if (
-    !input.retryability &&
-    !input.failureDisposition &&
-    input.sort === "updated_desc"
-  ) {
-    return listErrorClaimsWithoutRetryabilityFilter(input);
-  }
-
   const baseWhereSql = buildErrorClaimWhereSql({
     organizationId: input.organizationId,
     filters: input.filters,
@@ -114,98 +108,72 @@ export async function listErrorClaims(input: {
     input.sort,
     input.cursor,
     input.direction,
+    "filtered",
   );
-  const whereSql = cursorWhereSql
-    ? Prisma.sql`${baseWhereSql} AND ${cursorWhereSql}`
-    : baseWhereSql;
-  const [orderedClaimRows, totalCountRows] = await Promise.all([
-    prisma.$queryRaw<Array<ErrorClaimRow>>(
-      Prisma.sql`
+  const orderedClaimRows = await prisma.$queryRaw<Array<ErrorClaimPageRow>>(
+    Prisma.sql`
+      WITH filtered AS (
         SELECT
           c.id,
+          c."externalClaimId",
+          c."sourceEmail",
+          c."customerName",
+          c."productName",
+          c.status,
+          c."warrantyStatus",
+          c."processingAttempt",
+          c."latestWorkerFailureAt",
+          c."latestWorkerFailureReason",
+          c."latestWorkerFailureRetryable",
+          c."latestWorkerFailureReceiveCount",
+          c."latestWorkerFailureDisposition",
+          c."createdAt",
           c."updatedAt",
-          ${failureReceiveCountSql} AS "failureReceiveCount",
-          ${failureOccurredAtSql} AS "failureOccurredAt"
+          ${failureReceiveCountBaseSql} AS "failureReceiveCount",
+          ${failureOccurredAtBaseSql} AS "failureOccurredAt",
+          COUNT(*) OVER()::int AS "totalCount"
         FROM "Claim" c
-        WHERE ${whereSql}
-        ORDER BY ${buildErrorClaimOrderBySql(input.sort, input.direction)}
-        LIMIT ${input.limit + 1}
-      `,
-    ),
-    prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
-      SELECT COUNT(*)::int AS count
-      FROM "Claim" c
-      WHERE ${baseWhereSql}
-    `),
-  ]);
+        WHERE ${baseWhereSql}
+      )
+      SELECT
+        f.id,
+        f."updatedAt",
+        f."failureReceiveCount",
+        f."failureOccurredAt",
+        f."externalClaimId",
+        f."sourceEmail",
+        f."customerName",
+        f."productName",
+        f.status,
+        f."warrantyStatus",
+        f."processingAttempt",
+        f."latestWorkerFailureAt",
+        f."latestWorkerFailureReason",
+        f."latestWorkerFailureRetryable",
+        f."latestWorkerFailureReceiveCount",
+        f."latestWorkerFailureDisposition",
+        f."createdAt",
+        f."totalCount"
+      FROM filtered f
+      ${cursorWhereSql ? Prisma.sql`WHERE ${cursorWhereSql}` : Prisma.empty}
+      ORDER BY ${buildErrorClaimOrderBySql(input.sort, input.direction, "filtered")}
+      LIMIT ${input.limit + 1}
+    `,
+  );
 
   const hasMoreInDirection = orderedClaimRows.length > input.limit;
   const pageSlice = hasMoreInDirection ? orderedClaimRows.slice(0, input.limit) : orderedClaimRows;
   const orderedRows = input.direction === "prev" ? [...pageSlice].reverse() : pageSlice;
+  const totalCount =
+    orderedRows[0]?.totalCount ??
+    (input.cursor ? await loadErrorClaimTotalCount(baseWhereSql) : 0);
   return buildErrorClaimsResult({
-    claims: await loadErrorClaimsByRowOrder(orderedRows),
+    claims: orderedRows.map(mapErrorClaimPageRow),
     orderedRows,
-    totalCount: totalCountRows[0]?.count ?? 0,
-    hasMoreInDirection,
-    direction: input.direction,
-    sort: input.sort,
-    cursor: input.cursor,
-  });
-}
-
-async function listErrorClaimsWithoutRetryabilityFilter(input: {
-  organizationId: string;
-  filters: ClaimFilters;
-  retryability: ErrorClaimRetryabilityFilter | null;
-  failureDisposition: ErrorClaimFailureDispositionFilter | null;
-  sort: ErrorClaimSort;
-  limit: number;
-  cursor: ErrorClaimsCursor | null;
-  direction: ErrorClaimsPageDirection;
-}): Promise<{
-  claims: ErrorClaimRecord[];
-  totalCount: number;
-  nextCursor: string | null;
-  prevCursor: string | null;
-}> {
-  const baseWhere = buildClaimWhereInput(input.organizationId, {
-    ...input.filters,
-    status: "ERROR",
-  });
-  const timestampCursor =
-    input.cursor?.kind === "updated"
-      ? { timestamp: input.cursor.timestamp, id: input.cursor.id }
-      : null;
-  const where = applyTimestampCursor(baseWhere, timestampCursor, input.direction, "updatedAt");
-
-  const [claimsWindow, totalCount] = await Promise.all([
-    prisma.claim.findMany({
-      where,
-      orderBy: input.direction === "prev" ? errorClaimsOrderByAsc : errorClaimsOrderByDesc,
-      take: input.limit + 1,
-      select: errorClaimSelect,
-    }),
-    prisma.claim.count({
-      where: baseWhere,
-    }),
-  ]);
-
-  const hasMoreInDirection = claimsWindow.length > input.limit;
-  const pageSlice = hasMoreInDirection ? claimsWindow.slice(0, input.limit) : claimsWindow;
-  const claims = input.direction === "prev" ? [...pageSlice].reverse() : pageSlice;
-
-  return buildErrorClaimsResult({
-    claims: claims.map(mapErrorClaimRecord),
-    orderedRows: claims.map((claim) => ({
-      id: claim.id,
-      updatedAt: claim.updatedAt,
-      failureReceiveCount: claim.latestWorkerFailureReceiveCount ?? -1,
-      failureOccurredAt: claim.latestWorkerFailureAt ?? claim.updatedAt,
-    })),
     totalCount,
     hasMoreInDirection,
     direction: input.direction,
-    sort: "updated_desc",
+    sort: input.sort,
     cursor: input.cursor,
   });
 }
@@ -273,26 +241,9 @@ export function parseErrorClaimFailureDispositionFilter(
   return null;
 }
 
-const errorClaimSelect = {
-  id: true,
-  externalClaimId: true,
-  sourceEmail: true,
-  customerName: true,
-  productName: true,
-  status: true,
-  warrantyStatus: true,
-  processingAttempt: true,
-  latestWorkerFailureAt: true,
-  latestWorkerFailureReason: true,
-  latestWorkerFailureRetryable: true,
-  latestWorkerFailureReceiveCount: true,
-  latestWorkerFailureDisposition: true,
-  createdAt: true,
-  updatedAt: true,
-} as const satisfies Prisma.ClaimSelect;
-const failureReceiveCountSql = Prisma.sql`COALESCE(c."latestWorkerFailureReceiveCount", -1)`;
+const failureReceiveCountBaseSql = Prisma.sql`COALESCE(c."latestWorkerFailureReceiveCount", -1)`;
 
-const failureOccurredAtSql = Prisma.sql`COALESCE(c."latestWorkerFailureAt", c."updatedAt")`;
+const failureOccurredAtBaseSql = Prisma.sql`COALESCE(c."latestWorkerFailureAt", c."updatedAt")`;
 
 function buildErrorClaimWhereSql(input: {
   organizationId: string;
@@ -384,10 +335,19 @@ function buildErrorClaimCursorWhereSql(
   sort: ErrorClaimSort,
   cursor: ErrorClaimsCursor | null,
   direction: ErrorClaimsPageDirection,
+  scope: "base" | "filtered" = "base",
 ): Prisma.Sql | null {
   if (!cursor) {
     return null;
   }
+
+  const updatedAtSql =
+    scope === "filtered" ? Prisma.sql`f."updatedAt"` : Prisma.sql`c."updatedAt"`;
+  const idSql = scope === "filtered" ? Prisma.sql`f.id` : Prisma.sql`c.id`;
+  const failureReceiveCountSql =
+    scope === "filtered" ? Prisma.sql`f."failureReceiveCount"` : failureReceiveCountBaseSql;
+  const failureOccurredAtSql =
+    scope === "filtered" ? Prisma.sql`f."failureOccurredAt"` : failureOccurredAtBaseSql;
 
   if (sort === "receive_count_desc") {
     if (cursor.kind !== "receive_count_desc") {
@@ -398,12 +358,12 @@ function buildErrorClaimCursorWhereSql(
       return Prisma.sql`(
         ${failureReceiveCountSql} > ${cursor.receiveCount}
         OR (
-          ${failureReceiveCountSql} = ${cursor.receiveCount}
+        ${failureReceiveCountSql} = ${cursor.receiveCount}
           AND (
-            c."updatedAt" > ${timestampLiteralSql(cursor.timestamp)}
+            ${updatedAtSql} > ${timestampLiteralSql(cursor.timestamp)}
             OR (
-              c."updatedAt" = ${timestampLiteralSql(cursor.timestamp)}
-              AND c.id > ${cursor.id}
+              ${updatedAtSql} = ${timestampLiteralSql(cursor.timestamp)}
+              AND ${idSql} > ${cursor.id}
             )
           )
         )
@@ -413,12 +373,12 @@ function buildErrorClaimCursorWhereSql(
     return Prisma.sql`(
       ${failureReceiveCountSql} < ${cursor.receiveCount}
       OR (
-        ${failureReceiveCountSql} = ${cursor.receiveCount}
+      ${failureReceiveCountSql} = ${cursor.receiveCount}
         AND (
-          c."updatedAt" < ${timestampLiteralSql(cursor.timestamp)}
+          ${updatedAtSql} < ${timestampLiteralSql(cursor.timestamp)}
           OR (
-            c."updatedAt" = ${timestampLiteralSql(cursor.timestamp)}
-            AND c.id < ${cursor.id}
+            ${updatedAtSql} = ${timestampLiteralSql(cursor.timestamp)}
+            AND ${idSql} < ${cursor.id}
           )
         )
       )
@@ -435,7 +395,7 @@ function buildErrorClaimCursorWhereSql(
         ${failureOccurredAtSql} < ${timestampLiteralSql(cursor.occurredAt)}
         OR (
           ${failureOccurredAtSql} = ${timestampLiteralSql(cursor.occurredAt)}
-          AND c.id < ${cursor.id}
+          AND ${idSql} < ${cursor.id}
         )
       )`;
     }
@@ -444,7 +404,7 @@ function buildErrorClaimCursorWhereSql(
       ${failureOccurredAtSql} > ${timestampLiteralSql(cursor.occurredAt)}
       OR (
         ${failureOccurredAtSql} = ${timestampLiteralSql(cursor.occurredAt)}
-        AND c.id > ${cursor.id}
+        AND ${idSql} > ${cursor.id}
       )
     )`;
   }
@@ -455,80 +415,54 @@ function buildErrorClaimCursorWhereSql(
 
   if (direction === "prev") {
     return Prisma.sql`(
-      c."updatedAt" > ${cursor.timestamp}
-      OR (c."updatedAt" = ${cursor.timestamp} AND c.id > ${cursor.id})
+      ${updatedAtSql} > ${timestampLiteralSql(cursor.timestamp)}
+      OR (
+        ${updatedAtSql} = ${timestampLiteralSql(cursor.timestamp)}
+        AND ${idSql} > ${cursor.id}
+      )
     )`;
   }
 
   return Prisma.sql`(
-    c."updatedAt" < ${cursor.timestamp}
-    OR (c."updatedAt" = ${cursor.timestamp} AND c.id < ${cursor.id})
+    ${updatedAtSql} < ${timestampLiteralSql(cursor.timestamp)}
+    OR (
+      ${updatedAtSql} = ${timestampLiteralSql(cursor.timestamp)}
+      AND ${idSql} < ${cursor.id}
+    )
   )`;
 }
 
 function buildErrorClaimOrderBySql(
   sort: ErrorClaimSort,
   direction: ErrorClaimsPageDirection,
+  scope: "base" | "filtered" = "base",
 ): Prisma.Sql {
+  const updatedAtSql =
+    scope === "filtered" ? Prisma.sql`f."updatedAt"` : Prisma.sql`c."updatedAt"`;
+  const idSql = scope === "filtered" ? Prisma.sql`f.id` : Prisma.sql`c.id`;
+  const failureReceiveCountSql =
+    scope === "filtered" ? Prisma.sql`f."failureReceiveCount"` : failureReceiveCountBaseSql;
+  const failureOccurredAtSql =
+    scope === "filtered" ? Prisma.sql`f."failureOccurredAt"` : failureOccurredAtBaseSql;
+
   if (sort === "receive_count_desc") {
     return direction === "prev"
-      ? Prisma.sql`${failureReceiveCountSql} ASC, c."updatedAt" ASC, c.id ASC`
-      : Prisma.sql`${failureReceiveCountSql} DESC, c."updatedAt" DESC, c.id DESC`;
+      ? Prisma.sql`${failureReceiveCountSql} ASC, ${updatedAtSql} ASC, ${idSql} ASC`
+      : Prisma.sql`${failureReceiveCountSql} DESC, ${updatedAtSql} DESC, ${idSql} DESC`;
   }
 
   if (sort === "failure_oldest_first") {
     return direction === "prev"
-      ? Prisma.sql`${failureOccurredAtSql} DESC, c.id DESC`
-      : Prisma.sql`${failureOccurredAtSql} ASC, c.id ASC`;
+      ? Prisma.sql`${failureOccurredAtSql} DESC, ${idSql} DESC`
+      : Prisma.sql`${failureOccurredAtSql} ASC, ${idSql} ASC`;
   }
 
   return direction === "prev"
-    ? Prisma.sql`c."updatedAt" ASC, c.id ASC`
-    : Prisma.sql`c."updatedAt" DESC, c.id DESC`;
+    ? Prisma.sql`${updatedAtSql} ASC, ${idSql} ASC`
+    : Prisma.sql`${updatedAtSql} DESC, ${idSql} DESC`;
 }
 
-async function loadErrorClaimsByRowOrder(
-  orderedRows: Array<{ id: string }>,
-): Promise<
-  Array<
-    Prisma.ClaimGetPayload<{
-      select: typeof errorClaimSelect;
-    }>
-  >
-> {
-  const pageIds = orderedRows.map((row) => row.id);
-  const claimsById =
-    pageIds.length === 0
-      ? new Map<string, Prisma.ClaimGetPayload<{ select: typeof errorClaimSelect }>>()
-      : new Map(
-          (
-            await prisma.claim.findMany({
-              where: {
-                id: {
-                  in: pageIds,
-                },
-              },
-              select: errorClaimSelect,
-            })
-          ).map((claim) => [claim.id, claim]),
-        );
-
-  return orderedRows
-    .map((row) => claimsById.get(row.id) ?? null)
-    .filter(
-      (
-        claim,
-      ): claim is Prisma.ClaimGetPayload<{
-        select: typeof errorClaimSelect;
-      }> => claim !== null,
-    );
-}
-
-function mapErrorClaimRecord(
-  claim: Prisma.ClaimGetPayload<{
-    select: typeof errorClaimSelect;
-  }>,
-): ErrorClaimRecord {
+function mapErrorClaimPageRow(claim: ErrorClaimPageRow): ErrorClaimRecord {
   const failure = readWorkerFailureSnapshot(claim);
 
   return {
@@ -547,12 +481,7 @@ function mapErrorClaimRecord(
 }
 
 function buildErrorClaimsResult(input: {
-  claims: Array<
-    | ErrorClaimRecord
-    | Prisma.ClaimGetPayload<{
-        select: typeof errorClaimSelect;
-      }>
-  >;
+  claims: ErrorClaimRecord[];
   orderedRows: ErrorClaimRow[];
   totalCount: number;
   hasMoreInDirection: boolean;
@@ -560,15 +489,6 @@ function buildErrorClaimsResult(input: {
   sort: ErrorClaimSort;
   cursor: ErrorClaimsCursor | null;
 }) {
-  const mapped =
-    input.claims.length === 0 || "failure" in input.claims[0]
-      ? (input.claims as ErrorClaimRecord[])
-      : (input.claims as Array<
-          Prisma.ClaimGetPayload<{
-            select: typeof errorClaimSelect;
-          }>
-        >).map(mapErrorClaimRecord);
-
   const first = input.orderedRows[0] ?? null;
   const last = input.orderedRows[input.orderedRows.length - 1] ?? null;
 
@@ -591,11 +511,21 @@ function buildErrorClaimsResult(input: {
     : null;
 
   return {
-    claims: mapped,
+    claims: input.claims,
     totalCount: input.totalCount,
     nextCursor,
     prevCursor,
   };
+}
+
+async function loadErrorClaimTotalCount(baseWhereSql: Prisma.Sql): Promise<number> {
+  const rows = await prisma.$queryRaw<Array<{ count: number }>>(Prisma.sql`
+    SELECT COUNT(*)::int AS count
+    FROM "Claim" c
+    WHERE ${baseWhereSql}
+  `);
+
+  return rows[0]?.count ?? 0;
 }
 
 function parseUpdatedErrorClaimsCursor(value: string): UpdatedErrorClaimsCursor | null {

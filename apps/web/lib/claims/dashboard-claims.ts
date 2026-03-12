@@ -8,12 +8,12 @@ import {
 } from "./cursor-pagination";
 import {
   buildClaimWhereInput,
-  CLAIM_STATUSES,
   type ClaimFilters,
   type ClaimStatus,
 } from "./filters";
 import { loadClaimOperationalActivity, type ClaimOperationalActivity } from "./operational-activity";
 import { getClaimProcessingStaleBefore, isClaimProcessingStale } from "./processing-health";
+import { loadClaimStatusSummary } from "./status-summary";
 
 export type DashboardClaimRecord = {
   id: string;
@@ -138,27 +138,12 @@ export async function loadDashboardOperationalSummary(input: {
   const staleProcessingBefore = getClaimProcessingStaleBefore(now);
 
   const [
-    groupedCounts,
-    staleProcessingCount,
+    statusSummary,
     operationalActivity,
   ] = await Promise.all([
-    prisma.claim.groupBy({
-      by: ["status"],
-      where: {
-        organizationId: input.organizationId,
-      },
-      _count: {
-        _all: true,
-      },
-    }),
-    prisma.claim.count({
-      where: {
-        organizationId: input.organizationId,
-        status: "PROCESSING",
-        updatedAt: {
-          lte: staleProcessingBefore,
-        },
-      },
+    loadClaimStatusSummary({
+      organizationId: input.organizationId,
+      staleProcessingBefore,
     }),
     loadClaimOperationalActivity({
       organizationId: input.organizationId,
@@ -166,18 +151,10 @@ export async function loadDashboardOperationalSummary(input: {
     }),
   ]);
 
-  const statusCounts = Object.fromEntries(
-    CLAIM_STATUSES.map((status) => [status, 0]),
-  ) as DashboardStatusCounts;
-
-  for (const entry of groupedCounts) {
-    statusCounts[entry.status] = entry._count._all;
-  }
-
   return {
-    totalClaims: groupedCounts.reduce((sum, entry) => sum + entry._count._all, 0),
-    statusCounts,
-    staleProcessingCount,
+    totalClaims: statusSummary.totalClaims,
+    statusCounts: statusSummary.statusCounts,
+    staleProcessingCount: statusSummary.staleProcessingCount,
     operationalActivity,
   };
 }

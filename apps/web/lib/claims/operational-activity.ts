@@ -3,7 +3,7 @@ import {
   CLAIM_PROCESSING_RECOVERY_SOURCES,
   CLAIM_PROCESSING_START_SOURCES,
 } from "@claimflow/db";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 
 export type ClaimOperationalActivity = {
   windowHours: number;
@@ -22,55 +22,47 @@ export async function loadClaimOperationalActivity(input: {
   const activitySince = new Date(
     now.getTime() - CLAIM_OPERATIONAL_ACTIVITY_WINDOW_HOURS * 60 * 60 * 1000,
   );
-
-  const [
-    watchdogRecoveryCount,
-    manualProcessingRecoveryCount,
-    manualRetryCount,
-  ] = await Promise.all([
-    countClaimStatusTransitions(
-      CLAIM_PROCESSING_RECOVERY_SOURCES.watchdogProcessingRecovery,
-      input.organizationId,
-      activitySince,
-    ),
-    countClaimStatusTransitions(
-      CLAIM_PROCESSING_RECOVERY_SOURCES.manualProcessingRecovery,
-      input.organizationId,
-      activitySince,
-    ),
-    countClaimStatusTransitions(
-      CLAIM_PROCESSING_START_SOURCES.manualRetry,
-      input.organizationId,
-      activitySince,
-    ),
-  ]);
+  const countsBySource = await loadClaimStatusTransitionCountsBySource(
+    input.organizationId,
+    activitySince,
+  );
 
   return {
     windowHours: CLAIM_OPERATIONAL_ACTIVITY_WINDOW_HOURS,
-    watchdogRecoveryCount,
-    manualProcessingRecoveryCount,
-    manualRetryCount,
+    watchdogRecoveryCount:
+      countsBySource[CLAIM_PROCESSING_RECOVERY_SOURCES.watchdogProcessingRecovery] ?? 0,
+    manualProcessingRecoveryCount:
+      countsBySource[CLAIM_PROCESSING_RECOVERY_SOURCES.manualProcessingRecovery] ?? 0,
+    manualRetryCount: countsBySource[CLAIM_PROCESSING_START_SOURCES.manualRetry] ?? 0,
   };
 }
 
-async function countClaimStatusTransitions(
-  source:
-    | (typeof CLAIM_PROCESSING_RECOVERY_SOURCES)[keyof typeof CLAIM_PROCESSING_RECOVERY_SOURCES]
-    | (typeof CLAIM_PROCESSING_START_SOURCES)[keyof typeof CLAIM_PROCESSING_START_SOURCES],
+const CLAIM_OPERATIONAL_ACTIVITY_SOURCES = [
+  CLAIM_PROCESSING_RECOVERY_SOURCES.watchdogProcessingRecovery,
+  CLAIM_PROCESSING_RECOVERY_SOURCES.manualProcessingRecovery,
+  CLAIM_PROCESSING_START_SOURCES.manualRetry,
+] as const;
+
+type ClaimOperationalActivitySource =
+  (typeof CLAIM_OPERATIONAL_ACTIVITY_SOURCES)[number];
+
+async function loadClaimStatusTransitionCountsBySource(
   organizationId: string | undefined,
   activitySince: Date,
-) {
-  const where: Prisma.ClaimEventWhereInput = {
-    ...(organizationId ? { organizationId } : {}),
-    eventType: "STATUS_TRANSITION",
-    createdAt: {
-      gte: activitySince,
-    },
-    payload: {
-      path: ["source"],
-      equals: source,
-    },
-  };
+): Promise<Partial<Record<ClaimOperationalActivitySource, number>>> {
+  const rows = await prisma.$queryRaw<Array<{ source: string; count: number }>>(Prisma.sql`
+    SELECT
+      payload->>'source' AS source,
+      COUNT(*)::int AS count
+    FROM "ClaimEvent"
+    WHERE "eventType" = 'STATUS_TRANSITION'
+      AND "createdAt" >= ${activitySince}
+      ${organizationId ? Prisma.sql`AND "organizationId" = ${organizationId}` : Prisma.empty}
+      AND payload->>'source' IN (${Prisma.join(CLAIM_OPERATIONAL_ACTIVITY_SOURCES)})
+    GROUP BY payload->>'source'
+  `);
 
-  return prisma.claimEvent.count({ where });
+  return Object.fromEntries(
+    rows.map((row) => [row.source as ClaimOperationalActivitySource, row.count]),
+  );
 }

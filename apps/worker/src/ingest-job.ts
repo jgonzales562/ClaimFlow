@@ -71,6 +71,20 @@ export async function processClaimIngestJob(
           purchaseDate: true,
           issueSummary: true,
           retailer: true,
+          attachments: {
+            where: {
+              uploadStatus: "STORED",
+            },
+            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+            take: config.textractMaxAttachments,
+            select: {
+              id: true,
+              originalFilename: true,
+              contentType: true,
+              s3Bucket: true,
+              s3Key: true,
+            },
+          },
         },
       },
     },
@@ -232,21 +246,7 @@ export async function processClaimIngestJob(
 
   const inboundTextChars = getInboundTextCharCount(inboundMessage);
 
-  const storedAttachments = await prismaClient.claimAttachment.findMany({
-    where: {
-      claimId: claim.id,
-      uploadStatus: "STORED",
-    },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    select: {
-      id: true,
-      originalFilename: true,
-      contentType: true,
-      s3Bucket: true,
-      s3Key: true,
-    },
-    take: config.textractMaxAttachments,
-  });
+  const storedAttachments = claim.attachments;
 
   let textractMetadata: Prisma.InputJsonValue = {
     attempted: false,

@@ -131,6 +131,7 @@ model Claim {
   @@index([organizationId, status, latestWorkerFailureRetryable, updatedAt, id], map: "Claim_error_retryable_idx")
   @@index([organizationId, status, latestWorkerFailureDisposition, updatedAt, id], map: "Claim_error_disposition_idx")
   @@index([organizationId, createdAt, id], map: "Claim_organizationId_createdAt_id_idx")
+  @@index([status, updatedAt, id], map: "Claim_status_updatedAt_id_idx")
 }
 
 model IntegrationMailbox {
@@ -235,5 +236,7 @@ model ClaimEvent {
   @@index([organizationId, createdAt])
   @@index([claimId, createdAt, id], map: "ClaimEvent_claimId_createdAt_id_idx")
   @@index([claimId, eventType, createdAt, id], map: "ClaimEvent_claimId_eventType_createdAt_id_idx")
+  @@index([organizationId, eventType, createdAt], map: "ClaimEvent_organizationId_eventType_createdAt_idx")
+  @@index([eventType, createdAt], map: "ClaimEvent_eventType_createdAt_idx")
   @@index([actorUserId, createdAt])
 }
