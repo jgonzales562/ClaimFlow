@@ -1,7 +1,11 @@
 import { SendMessageCommand } from "@aws-sdk/client-sqs";
 import {
   CLAIM_PROCESSING_RECOVERY_SOURCES,
+  createClaimIngestQueueOutboxEntry,
+  dispatchClaimIngestQueueOutboxById,
+  getClaimIngestQueueAvailableAt,
   recordProcessingRecoveryIfStale,
+  type ClaimIngestQueueSendResult,
 } from "@claimflow/db";
 import type { PrismaClient } from "@prisma/client";
 import { randomUUID } from "node:crypto";
@@ -21,6 +25,7 @@ export type ProcessingWatchdogResult = {
 
 type ProcessingWatchdogDependencies = {
   nowFn?: () => Date;
+  createQueueMessageIdFn?: () => string;
   createProcessingLeaseTokenFn?: () => string;
   logInfoFn?: (event: string, context: Record<string, unknown>) => void;
   logErrorFn?: (event: string, context: Record<string, unknown>) => void;
@@ -38,6 +43,8 @@ export async function recoverStaleProcessingClaims(
   const staleBefore = new Date(
     now.getTime() - input.config.processingStaleMinutes * 60_000,
   );
+  const createQueueMessageIdFn =
+    dependencies.createQueueMessageIdFn ?? defaultCreateQueueMessageId;
   const createProcessingLeaseTokenFn =
     dependencies.createProcessingLeaseTokenFn ?? defaultCreateProcessingLeaseToken;
   const logInfoFn = dependencies.logInfoFn ?? (() => {});
@@ -96,71 +103,114 @@ export async function recoverStaleProcessingClaims(
     }
 
     try {
+      const queueMessageId = createQueueMessageIdFn();
       const processingLeaseToken = createProcessingLeaseTokenFn();
-      const response = await input.sqsClient.send(
-        new SendMessageCommand({
-          QueueUrl: input.config.queueUrl,
-          MessageBody: JSON.stringify({
-            version: 3,
-            claimId: claim.id,
-            organizationId: claim.organizationId,
-            inboundMessageId: latestInboundMessage.id,
-            providerMessageId: latestInboundMessage.providerMessageId,
-            enqueuedAt: now.toISOString(),
-            processingAttempt: claim.processingAttempt + 1,
-            processingLeaseToken,
-          } satisfies ClaimIngestQueueMessage),
-          DelaySeconds: WATCHDOG_RECOVERY_DELAY_SECONDS,
-        }),
-      );
+      const availableAt = getClaimIngestQueueAvailableAt(now, WATCHDOG_RECOVERY_DELAY_SECONDS);
 
-      const messageId =
-        typeof response === "object" &&
-        response !== null &&
-        "MessageId" in response &&
-        typeof (response as { MessageId?: unknown }).MessageId === "string"
-          ? (response as { MessageId: string }).MessageId
-          : null;
-
-      if (!messageId) {
-        result.failedCount += 1;
-        logErrorFn("processing_watchdog_enqueue_failed", {
-          claimId: claim.id,
-          organizationId: claim.organizationId,
-          error: "SQS did not return a MessageId.",
-        });
-        continue;
-      }
-
-      const recovered = await input.prismaClient.$transaction((tx) =>
-        recordProcessingRecoveryIfStale({
+      const recovered = await input.prismaClient.$transaction(async (tx) => {
+        const recoveryAttempt = await recordProcessingRecoveryIfStale({
           tx,
           organizationId: claim.organizationId,
           claimId: claim.id,
           source: CLAIM_PROCESSING_RECOVERY_SOURCES.watchdogProcessingRecovery,
           staleBefore,
           touchedAt: now,
-          queueMessageId: messageId,
+          queueMessageId: queueMessageId,
           inboundMessageId: latestInboundMessage.id,
           providerMessageId: latestInboundMessage.providerMessageId,
           expectedProcessingAttempt: claim.processingAttempt,
           processingLeaseToken,
           staleMinutes: input.config.processingStaleMinutes,
           previousUpdatedAt: claim.updatedAt.toISOString(),
-        }),
-      );
+        });
+
+        if (recoveryAttempt === null) {
+          return null;
+        }
+
+        await createClaimIngestQueueOutboxEntry({
+          tx,
+          id: queueMessageId,
+          organizationId: claim.organizationId,
+          claimId: claim.id,
+          inboundMessageId: latestInboundMessage.id,
+          providerMessageId: latestInboundMessage.providerMessageId,
+          queueUrl: input.config.queueUrl,
+          processingAttempt: claim.processingAttempt + 1,
+          processingLeaseToken,
+          availableAt,
+        });
+
+        return recoveryAttempt;
+      });
 
       if (recovered) {
+        const dispatchResult = await dispatchClaimIngestQueueOutboxById(
+          {
+            prismaClient: input.prismaClient,
+            outboxId: queueMessageId,
+            sendMessageFn: async (dispatchInput): Promise<ClaimIngestQueueSendResult> => {
+              try {
+                const response = await input.sqsClient.send(
+                  new SendMessageCommand({
+                    QueueUrl: dispatchInput.queueUrl,
+                    MessageBody: JSON.stringify(
+                      dispatchInput.message satisfies ClaimIngestQueueMessage,
+                    ),
+                    DelaySeconds: dispatchInput.delaySeconds,
+                  }),
+                );
+
+                return {
+                  ok: true,
+                  sqsMessageId:
+                    typeof response === "object" &&
+                    response !== null &&
+                    "MessageId" in response &&
+                    typeof (response as { MessageId?: unknown }).MessageId === "string"
+                      ? (response as { MessageId: string }).MessageId
+                      : null,
+                };
+              } catch (error: unknown) {
+                return {
+                  ok: false,
+                  error: extractErrorMessage(error),
+                };
+              }
+            },
+          },
+          {
+            nowFn: () => now,
+          },
+        );
+
         result.recoveredCount += 1;
         logInfoFn("processing_watchdog_recovered", {
           claimId: claim.id,
           organizationId: claim.organizationId,
           previousProcessingAttempt: claim.processingAttempt,
           nextProcessingAttempt: claim.processingAttempt + 1,
-          queueMessageId: messageId,
+          queueMessageId: queueMessageId,
           inboundMessageId: latestInboundMessage.id,
           providerMessageId: latestInboundMessage.providerMessageId,
         });
+
+        if (dispatchResult.kind === "send_failed") {
+          logErrorFn("processing_watchdog_dispatch_deferred", {
+            claimId: claim.id,
+            organizationId: claim.organizationId,
+            queueMessageId: queueMessageId,
+            error: dispatchResult.error,
+          });
+        }
+
+        if (dispatchResult.kind === "dispatched" && !dispatchResult.persisted) {
+          logErrorFn("processing_watchdog_dispatch_state_unconfirmed", {
+            claimId: claim.id,
+            organizationId: claim.organizationId,
+            queueMessageId: queueMessageId,
+          });
+        }
       } else {
         result.skippedCount += 1;
         logInfoFn("processing_watchdog_recovery_skipped", {
@@ -173,7 +223,7 @@ export async function recoverStaleProcessingClaims(
       }
     } catch (error: unknown) {
       result.failedCount += 1;
-      logErrorFn("processing_watchdog_enqueue_failed", {
+      logErrorFn("processing_watchdog_recovery_failed", {
         claimId: claim.id,
         organizationId: claim.organizationId,
         error: extractErrorMessage(error),
@@ -192,5 +242,9 @@ export async function recoverStaleProcessingClaims(
 }
 
 function defaultCreateProcessingLeaseToken(): string {
+  return randomUUID();
+}
+
+function defaultCreateQueueMessageId(): string {
   return randomUUID();
 }

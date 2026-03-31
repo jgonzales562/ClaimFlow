@@ -1,6 +1,14 @@
-import { prisma, CLAIM_PROCESSING_START_SOURCES, startClaimProcessingAttemptIfCurrent } from "@claimflow/db";
+import {
+  CLAIM_PROCESSING_START_SOURCES,
+  createClaimIngestQueueOutboxEntry,
+  dispatchClaimIngestQueueOutboxById,
+  getClaimIngestQueueAvailableAt,
+  prisma,
+  startClaimProcessingAttemptIfCurrent,
+  type ClaimIngestQueueSendResult,
+} from "@claimflow/db";
 import { randomUUID } from "node:crypto";
-import { enqueueClaimIngestJob } from "@/lib/queue/claims";
+import { enqueueClaimIngestJob, resolveClaimIngestQueueUrl } from "@/lib/queue/claims";
 import { readWorkerFailureSnapshot } from "./worker-failure";
 
 const MANUAL_RETRY_DELAY_SECONDS = 2;
@@ -8,6 +16,8 @@ const MANUAL_RETRY_DELAY_SECONDS = 2;
 type RetryErroredClaimDependencies = {
   prismaClient?: typeof prisma;
   enqueueClaimIngestJobFn?: typeof enqueueClaimIngestJob;
+  resolveQueueUrlFn?: () => string | null;
+  createQueueMessageIdFn?: () => string;
   createProcessingLeaseTokenFn?: () => string;
 };
 
@@ -28,8 +38,14 @@ export async function retryErroredClaim(
 > {
   const prismaClient = dependencies.prismaClient ?? prisma;
   const enqueueClaimIngestJobFn = dependencies.enqueueClaimIngestJobFn ?? enqueueClaimIngestJob;
+  const resolveQueueUrlFn = dependencies.resolveQueueUrlFn ?? resolveClaimIngestQueueUrl;
+  const createQueueMessageIdFn = dependencies.createQueueMessageIdFn ?? defaultCreateQueueMessageId;
   const createProcessingLeaseTokenFn =
     dependencies.createProcessingLeaseTokenFn ?? defaultCreateProcessingLeaseToken;
+  const queueUrl = resolveQueueUrlFn();
+  if (!queueUrl) {
+    return { kind: "queue_not_configured" };
+  }
 
   const claim = await prismaClient.claim.findFirst({
     where: {
@@ -75,27 +91,14 @@ export async function retryErroredClaim(
     return { kind: "retry_unavailable" };
   }
 
+  const queueMessageId = createQueueMessageIdFn();
   const nextProcessingAttempt = claim.processingAttempt + 1;
   const processingLeaseToken = createProcessingLeaseTokenFn();
+  const now = new Date();
+  const availableAt = getClaimIngestQueueAvailableAt(now, MANUAL_RETRY_DELAY_SECONDS);
 
-  const queueResult = await enqueueClaimIngestJobFn({
-    claimId: claim.id,
-    organizationId: input.organizationId,
-    inboundMessageId: latestInboundMessage.id,
-    providerMessageId: latestInboundMessage.providerMessageId,
-    processingAttempt: nextProcessingAttempt,
-    processingLeaseToken,
-    delaySeconds: MANUAL_RETRY_DELAY_SECONDS,
-  });
-
-  if (!queueResult.enqueued) {
-    return queueResult.reason === "queue_not_configured"
-      ? { kind: "queue_not_configured" }
-      : { kind: "enqueue_failed" };
-  }
-
-  const transitioned = await prismaClient.$transaction((tx) =>
-    startClaimProcessingAttemptIfCurrent({
+  const transitioned = await prismaClient.$transaction(async (tx) => {
+    const startedAttempt = await startClaimProcessingAttemptIfCurrent({
       tx,
       organizationId: input.organizationId,
       claimId: claim.id,
@@ -104,13 +107,66 @@ export async function retryErroredClaim(
       processingLeaseToken,
       fromStatus: "ERROR",
       source: CLAIM_PROCESSING_START_SOURCES.manualRetry,
-      queueMessageId: queueResult.messageId,
+      queueMessageId: queueMessageId,
       inboundMessageId: latestInboundMessage.id,
       providerMessageId: latestInboundMessage.providerMessageId,
-    }),
-  );
+    });
+
+    if (startedAttempt === null) {
+      return false;
+    }
+
+    await createClaimIngestQueueOutboxEntry({
+      tx,
+      id: queueMessageId,
+      organizationId: input.organizationId,
+      claimId: claim.id,
+      inboundMessageId: latestInboundMessage.id,
+      providerMessageId: latestInboundMessage.providerMessageId,
+      queueUrl,
+      processingAttempt: nextProcessingAttempt,
+      processingLeaseToken,
+      availableAt,
+    });
+
+    return true;
+  });
 
   if (transitioned) {
+    await dispatchClaimIngestQueueOutboxById(
+      {
+        prismaClient,
+        outboxId: queueMessageId,
+        sendMessageFn: async (dispatchInput): Promise<ClaimIngestQueueSendResult> => {
+          const queueResult = await enqueueClaimIngestJobFn({
+            claimId: dispatchInput.message.claimId,
+            organizationId: dispatchInput.message.organizationId,
+            inboundMessageId: dispatchInput.message.inboundMessageId,
+            providerMessageId: dispatchInput.message.providerMessageId,
+            processingAttempt: dispatchInput.message.processingAttempt,
+            processingLeaseToken: dispatchInput.message.processingLeaseToken,
+            delaySeconds: dispatchInput.delaySeconds,
+            messageId: queueMessageId,
+            queueUrl: dispatchInput.queueUrl,
+            enqueuedAt: new Date(dispatchInput.message.enqueuedAt),
+          });
+
+          return queueResult.enqueued
+            ? {
+                ok: true,
+                sqsMessageId: queueResult.sqsMessageId ?? null,
+              }
+            : {
+                ok: false,
+                error: queueResult.error ?? "Unknown queue dispatch failure.",
+              };
+        },
+      },
+      {
+        nowFn: () => now,
+      },
+    );
+
     return {
       kind: "retried",
       claimId: claim.id,
@@ -142,5 +198,9 @@ export async function retryErroredClaim(
 }
 
 function defaultCreateProcessingLeaseToken(): string {
+  return randomUUID();
+}
+
+function defaultCreateQueueMessageId(): string {
   return randomUUID();
 }

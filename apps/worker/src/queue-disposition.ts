@@ -3,33 +3,11 @@ import {
   SendMessageCommand,
   type Message,
 } from "@aws-sdk/client-sqs";
+import type { ClaimIngestQueueMessageV3 } from "@claimflow/db";
 import { extractErrorMessage } from "./errors.js";
 import { truncateString } from "./strings.js";
 
-type ClaimIngestQueueMessageBase = {
-  claimId: string;
-  organizationId: string;
-  inboundMessageId: string;
-  providerMessageId: string;
-  enqueuedAt: string;
-};
-
-export type ClaimIngestQueueMessage =
-  | (ClaimIngestQueueMessageBase & {
-      version: 1;
-      processingAttempt?: undefined;
-      processingLeaseToken?: undefined;
-    })
-  | (ClaimIngestQueueMessageBase & {
-      version: 2;
-      processingAttempt: number;
-      processingLeaseToken?: undefined;
-    })
-  | (ClaimIngestQueueMessageBase & {
-      version: 3;
-      processingAttempt: number;
-      processingLeaseToken: string;
-    });
+export type ClaimIngestQueueMessage = ClaimIngestQueueMessageV3;
 
 type QueueDispositionContextValue = string | number | boolean | null | undefined;
 
@@ -126,16 +104,8 @@ export async function handleQueueProcessingFailure(
           retryable: input.retryable,
           receiveCount: input.receiveCount,
           failureDisposition: "moved_to_dlq",
-          ...(typeof input.queueMessage.processingAttempt === "number"
-            ? {
-                processingAttempt: input.queueMessage.processingAttempt,
-              }
-            : {}),
-          ...(typeof input.queueMessage.processingLeaseToken === "string"
-            ? {
-                processingLeaseToken: input.queueMessage.processingLeaseToken,
-              }
-            : {}),
+          processingAttempt: input.queueMessage.processingAttempt,
+          processingLeaseToken: input.queueMessage.processingLeaseToken,
         });
       }
 
@@ -165,16 +135,8 @@ export async function handleQueueProcessingFailure(
         retryable: input.retryable,
         receiveCount: input.receiveCount,
         failureDisposition: "dropped_non_retryable",
-        ...(typeof input.queueMessage.processingAttempt === "number"
-          ? {
-              processingAttempt: input.queueMessage.processingAttempt,
-            }
-          : {}),
-        ...(typeof input.queueMessage.processingLeaseToken === "string"
-          ? {
-              processingLeaseToken: input.queueMessage.processingLeaseToken,
-            }
-          : {}),
+        processingAttempt: input.queueMessage.processingAttempt,
+        processingLeaseToken: input.queueMessage.processingLeaseToken,
       });
     }
 
@@ -200,13 +162,9 @@ export async function handleQueueProcessingFailure(
     reason: input.reason,
   });
 
-  if (
-    input.queueMessage &&
-    typeof input.queueMessage.processingAttempt === "number" &&
-    typeof input.queueMessage.processingLeaseToken === "string"
-  ) {
+  if (input.queueMessage && dependencies.releaseClaimProcessingLeaseFn) {
     try {
-      await dependencies.releaseClaimProcessingLeaseFn?.({
+      await dependencies.releaseClaimProcessingLeaseFn({
         claimId: input.queueMessage.claimId,
         organizationId: input.queueMessage.organizationId,
         processingAttempt: input.queueMessage.processingAttempt,

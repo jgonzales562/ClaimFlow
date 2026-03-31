@@ -95,6 +95,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
             <p className="notice notice--danger">
               {errorValue === "no_membership"
                 ? "This user has no organization membership."
+                : errorValue === "multiple_memberships"
+                  ? "This user belongs to multiple organizations and needs an organization-specific sign-in flow."
                 : errorValue === "invalid_role"
                   ? "This user has an invalid organization role."
                   : "Invalid email or password."}

@@ -64,6 +64,7 @@ model Organization {
   claimAttachments   ClaimAttachment[]
   claimExtractions   ClaimExtraction[]
   claimEvents        ClaimEvent[]
+  claimIngestQueueOutbox ClaimIngestQueueOutbox[]
 }
 
 model User {
@@ -122,6 +123,7 @@ model Claim {
   attachments     ClaimAttachment[]
   extractions     ClaimExtraction[]
   events          ClaimEvent[]
+  ingestQueueOutbox ClaimIngestQueueOutbox[]
 
   @@unique([organizationId, externalClaimId])
   @@index([organizationId, status, createdAt])
@@ -132,6 +134,33 @@ model Claim {
   @@index([organizationId, status, latestWorkerFailureDisposition, updatedAt, id], map: "Claim_error_disposition_idx")
   @@index([organizationId, createdAt, id], map: "Claim_organizationId_createdAt_id_idx")
   @@index([status, updatedAt, id], map: "Claim_status_updatedAt_id_idx")
+}
+
+model ClaimIngestQueueOutbox {
+  id                     String       @id
+  organizationId         String
+  claimId                String
+  inboundMessageId       String
+  providerMessageId      String
+  queueUrl               String
+  processingAttempt      Int
+  processingLeaseToken   String
+  availableAt            DateTime
+  dispatchAttempts       Int          @default(0)
+  lastDispatchAttemptAt  DateTime?
+  lastDispatchError      String?
+  dispatchedAt           DateTime?
+  sqsMessageId           String?
+  dispatchLeaseToken     String?
+  dispatchLeaseClaimedAt DateTime?
+  createdAt              DateTime     @default(now())
+  updatedAt              DateTime     @updatedAt
+  organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim                  Claim        @relation(fields: [claimId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt], map: "ClaimIngestQueueOutbox_organizationId_createdAt_idx")
+  @@index([claimId, createdAt], map: "ClaimIngestQueueOutbox_claimId_createdAt_idx")
+  @@index([dispatchedAt, availableAt, createdAt], map: "ClaimIngestQueueOutbox_dispatch_state_idx")
 }
 
 model IntegrationMailbox {

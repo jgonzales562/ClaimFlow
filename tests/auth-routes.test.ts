@@ -93,6 +93,40 @@ test("login JSON rejects users without memberships", async () => {
   });
 });
 
+test("login JSON rejects users with multiple memberships until org selection exists", async () => {
+  const handler = createLoginHandler({
+    findUserByEmailFn: async () => ({
+      ...baseUser,
+      memberships: [
+        ...baseUser.memberships,
+        {
+          organizationId: "org-2",
+          role: "ANALYST",
+          organization: {
+            id: "org-2",
+            name: "ClaimFlow West",
+            slug: "claimflow-west",
+          },
+        },
+      ],
+    }),
+    verifyPasswordFn: async () => true,
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "analyst@example.com", password: "correct-password" }),
+    }),
+  );
+
+  assert.equal(response.status, 409);
+  assert.deepEqual(await response.json(), {
+    error: "User belongs to multiple organizations. Organization selection is required.",
+  });
+});
+
 test("login form redirects users with invalid membership roles", async () => {
   const handler = createLoginHandler({
     findUserByEmailFn: async () => ({
@@ -120,6 +154,44 @@ test("login form redirects users with invalid membership roles", async () => {
 
   assert.equal(response.status, 303);
   assert.equal(response.headers.get("location"), "http://localhost/login?error=invalid_role");
+});
+
+test("login form redirects users with multiple memberships back to the login page", async () => {
+  const handler = createLoginHandler({
+    findUserByEmailFn: async () => ({
+      ...baseUser,
+      memberships: [
+        ...baseUser.memberships,
+        {
+          organizationId: "org-2",
+          role: "ANALYST",
+          organization: {
+            id: "org-2",
+            name: "ClaimFlow West",
+            slug: "claimflow-west",
+          },
+        },
+      ],
+    }),
+    verifyPasswordFn: async () => true,
+  });
+
+  const formData = new FormData();
+  formData.set("email", "analyst@example.com");
+  formData.set("password", "correct-password");
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      body: formData,
+    }),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(
+    response.headers.get("location"),
+    "http://localhost/login?error=multiple_memberships",
+  );
 });
 
 test("login JSON returns session data and sets the session cookie on success", async () => {

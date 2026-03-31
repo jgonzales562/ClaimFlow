@@ -25,6 +25,8 @@ test("retryErroredClaim re-enqueues retryable error claims and records manual re
       },
       {
         prismaClient: prisma,
+        resolveQueueUrlFn: () => "https://example.invalid/claims",
+        createQueueMessageIdFn: () => "queue-retry-1",
         createProcessingLeaseTokenFn: () => "lease-retry-1",
         enqueueClaimIngestJobFn: async (input) => {
           enqueueCalls.push(input as unknown as Record<string, unknown>);
@@ -42,17 +44,17 @@ test("retryErroredClaim re-enqueues retryable error claims and records manual re
       claimId,
     });
 
-    assert.deepEqual(enqueueCalls, [
-      {
-        claimId,
-        organizationId,
-        inboundMessageId,
-        providerMessageId,
-        processingAttempt: 1,
-        processingLeaseToken: "lease-retry-1",
-        delaySeconds: 2,
-      },
-    ]);
+    assert.equal(enqueueCalls.length, 1);
+    assert.equal(enqueueCalls[0]?.claimId, claimId);
+    assert.equal(enqueueCalls[0]?.organizationId, organizationId);
+    assert.equal(enqueueCalls[0]?.inboundMessageId, inboundMessageId);
+    assert.equal(enqueueCalls[0]?.providerMessageId, providerMessageId);
+    assert.equal(enqueueCalls[0]?.processingAttempt, 1);
+    assert.equal(enqueueCalls[0]?.processingLeaseToken, "lease-retry-1");
+    assert.equal(enqueueCalls[0]?.delaySeconds, 2);
+    assert.equal(enqueueCalls[0]?.messageId, "queue-retry-1");
+    assert.equal(enqueueCalls[0]?.queueUrl, "https://example.invalid/claims");
+    assert.ok(enqueueCalls[0]?.enqueuedAt instanceof Date);
 
     const claim = await prisma.claim.findUniqueOrThrow({
       where: {
@@ -83,7 +85,7 @@ test("retryErroredClaim re-enqueues retryable error claims and records manual re
       source: "manual_retry",
       inboundMessageId,
       providerMessageId,
-      queueMessageId: "message-retry-1",
+      queueMessageId: "queue-retry-1",
     });
     assert.equal(claim.events[1]?.actorUserId, userId);
   } finally {
@@ -161,6 +163,7 @@ test("retryErroredClaim leaves claims in ERROR when the retry queue is not confi
       },
       {
         prismaClient: prisma,
+        resolveQueueUrlFn: () => null,
         enqueueClaimIngestJobFn: async () => ({
           enqueued: false,
           reason: "queue_not_configured",

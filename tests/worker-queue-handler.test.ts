@@ -109,6 +109,59 @@ test("worker routes malformed message bodies to the DLQ when configured", async 
   assert.equal(dlqBody.queueMessage, null);
 });
 
+test("worker routes legacy queue message versions to the DLQ when configured", async () => {
+  const loggedErrorEvents: Array<{ event: string; context: Record<string, unknown> }> = [];
+  const commands = createCommandRecorder();
+
+  await handleClaimQueueMessage(
+    {
+      config: {
+        queueUrl: "https://example.invalid/claims",
+        dlqUrl: "https://example.invalid/claims-dlq",
+        maxReceiveCount: 5,
+      },
+      sqsClient: commands.client,
+      sqsMessage: buildSqsMessage({
+        Body: JSON.stringify({
+          claimId: "claim-legacy",
+          organizationId: "org-legacy",
+          inboundMessageId: "inbound-legacy",
+          providerMessageId: "provider-legacy",
+          enqueuedAt: "2026-03-05T12:00:00.000Z",
+          version: 2,
+          processingAttempt: 1,
+        }),
+        ReceiptHandle: "receipt-legacy",
+      }),
+    },
+    {
+      processClaimIngestJobFn: async () => {
+        throw new Error("processClaimIngestJob should not be called for legacy message versions");
+      },
+      markClaimAsErrorFn: async () => {
+        throw new Error("markClaimAsError should not run without a parsed queue message");
+      },
+      logInfoFn: () => {
+        throw new Error("logInfo should not be called for legacy message versions");
+      },
+      logErrorFn: (event, context) => {
+        loggedErrorEvents.push({ event, context });
+      },
+    },
+  );
+
+  assert.deepEqual(
+    loggedErrorEvents.map((entry) => entry.event),
+    ["claim_ingest_moved_to_dlq"],
+  );
+
+  const sendCommands = commands.sent.filter((command) => isCommand(command, "SendMessageCommand"));
+  assert.equal(sendCommands.length, 1);
+  const dlqBody = JSON.parse(String(sendCommands[0].input.MessageBody)) as Record<string, unknown>;
+  assert.equal(dlqBody.reason, "SQS message body does not match claim ingest schema.");
+  assert.equal(dlqBody.queueMessage, null);
+});
+
 test("worker ignores messages that are missing an SQS receipt handle", async () => {
   const loggedErrorEvents: Array<{ event: string; context: Record<string, unknown> }> = [];
   const commands = createCommandRecorder();
@@ -188,12 +241,14 @@ test("worker uses retryable metadata from WorkerMessageError on processing failu
 
 function buildQueueMessage(): ClaimIngestQueueMessage {
   return {
-    version: 1,
+    version: 3,
     claimId: "claim-queue-handler",
     organizationId: "org-queue-handler",
     inboundMessageId: "inbound-queue-handler",
     providerMessageId: "provider-queue-handler",
     enqueuedAt: "2026-03-05T12:00:00.000Z",
+    processingAttempt: 1,
+    processingLeaseToken: "lease-queue-handler-1",
   };
 }
 

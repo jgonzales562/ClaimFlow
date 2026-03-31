@@ -42,6 +42,8 @@ test("worker failure moves retryable messages to the DLQ after the max receive c
     {
       claimId: queueMessage.claimId,
       organizationId: queueMessage.organizationId,
+      processingAttempt: queueMessage.processingAttempt,
+      processingLeaseToken: queueMessage.processingLeaseToken,
       reason: "transient downstream failure",
       retryable: true,
       receiveCount: 3,
@@ -69,7 +71,7 @@ test("worker failure moves retryable messages to the DLQ after the max receive c
     receiveCount: 3,
     queueMessage,
     originalMessageId: "message-1",
-    originalBody: '{"version":1}',
+    originalBody: JSON.stringify(buildQueueMessage()),
   });
 });
 
@@ -109,6 +111,8 @@ test("worker failure drops non-retryable messages when no DLQ is configured", as
     {
       claimId: queueMessage.claimId,
       organizationId: queueMessage.organizationId,
+      processingAttempt: queueMessage.processingAttempt,
+      processingLeaseToken: queueMessage.processingLeaseToken,
       reason: "invalid message payload",
       retryable: false,
       receiveCount: 1,
@@ -276,12 +280,14 @@ test("worker failure releases the processing lease before retrying a version 3 m
 
 function buildQueueMessage(): ClaimIngestQueueMessage {
   return {
-    version: 1,
+    version: 3,
     claimId: "claim-1",
     organizationId: "org-1",
     inboundMessageId: "inbound-1",
     providerMessageId: "provider-1",
     enqueuedAt: "2026-03-05T11:59:00.000Z",
+    processingAttempt: 1,
+    processingLeaseToken: "lease-1",
   };
 }
 
@@ -291,7 +297,7 @@ function buildSqsMessage(): {
 } {
   return {
     MessageId: "message-1",
-    Body: '{"version":1}',
+    Body: JSON.stringify(buildQueueMessage()),
   };
 }
 

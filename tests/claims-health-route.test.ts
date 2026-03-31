@@ -30,6 +30,7 @@ test("claims health rejects missing bearer tokens", async () => {
 test("claims health returns an ok snapshot for authorized monitors", async () => {
   const handler = createClaimsHealthHandler({
     getBearerTokenFn: () => "ops-secret-token",
+    getMaxDueOutboxCountFn: () => 1,
     getMaxStaleProcessingCountFn: () => 2,
     getStaleMinutesFn: () => 30,
     isProcessingWatchdogEnabledFn: () => true,
@@ -50,6 +51,14 @@ test("claims health returns an ok snapshot for authorized monitors", async () =>
         watchdogRecoveryCount: 3,
         manualProcessingRecoveryCount: 2,
         manualRetryCount: 4,
+      },
+      ingestQueueOutbox: {
+        pendingCount: 1,
+        dueCount: 1,
+        oldestPendingAgeMinutes: 4,
+        oldestPendingCreatedAt: new Date("2026-03-07T14:56:00.000Z"),
+        oldestDueAgeMinutes: 2,
+        oldestDueAvailableAt: new Date("2026-03-07T14:58:00.000Z"),
       },
     }),
   });
@@ -84,6 +93,14 @@ test("claims health returns an ok snapshot for authorized monitors", async () =>
         manualProcessingRecoveryCount: 2,
         manualRetryCount: 4,
       },
+      ingestQueueOutbox: {
+        pendingCount: 1,
+        dueCount: 1,
+        oldestPendingAgeMinutes: 4,
+        oldestPendingCreatedAt: "2026-03-07T14:56:00.000Z",
+        oldestDueAgeMinutes: 2,
+        oldestDueAvailableAt: "2026-03-07T14:58:00.000Z",
+      },
     },
     checks: {
       staleProcessing: {
@@ -92,6 +109,14 @@ test("claims health returns an ok snapshot for authorized monitors", async () =>
         affectedOrganizations: 1,
         threshold: 2,
         staleAfterMinutes: 30,
+      },
+      ingestQueueOutbox: {
+        status: "ok",
+        pendingCount: 1,
+        dueCount: 1,
+        threshold: 1,
+        oldestPendingAgeMinutes: 4,
+        oldestDueAgeMinutes: 2,
       },
       processingWatchdog: {
         enabled: true,
@@ -103,6 +128,7 @@ test("claims health returns an ok snapshot for authorized monitors", async () =>
 test("claims health returns 503 when stale processing breaches the threshold", async () => {
   const handler = createClaimsHealthHandler({
     getBearerTokenFn: () => "ops-secret-token",
+    getMaxDueOutboxCountFn: () => 0,
     getMaxStaleProcessingCountFn: () => 0,
     getStaleMinutesFn: () => 45,
     isProcessingWatchdogEnabledFn: () => false,
@@ -122,6 +148,14 @@ test("claims health returns 503 when stale processing breaches the threshold", a
         watchdogRecoveryCount: 0,
         manualProcessingRecoveryCount: 0,
         manualRetryCount: 0,
+      },
+      ingestQueueOutbox: {
+        pendingCount: 2,
+        dueCount: 1,
+        oldestPendingAgeMinutes: 30,
+        oldestPendingCreatedAt: new Date("2026-03-07T14:30:00.000Z"),
+        oldestDueAgeMinutes: 12,
+        oldestDueAvailableAt: new Date("2026-03-07T14:48:00.000Z"),
       },
     }),
   });
@@ -144,6 +178,14 @@ test("claims health returns 503 when stale processing breaches the threshold", a
       affectedOrganizations: 1,
       threshold: 0,
       staleAfterMinutes: 45,
+    },
+    ingestQueueOutbox: {
+      status: "degraded",
+      pendingCount: 2,
+      dueCount: 1,
+      threshold: 0,
+      oldestPendingAgeMinutes: 30,
+      oldestDueAgeMinutes: 12,
     },
     processingWatchdog: {
       enabled: false,

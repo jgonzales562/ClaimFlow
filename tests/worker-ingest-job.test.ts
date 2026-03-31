@@ -174,11 +174,12 @@ test("worker ingest job skips extraction for terminal claim statuses", async () 
   }
 });
 
-test("worker ingest job ignores stale version 2 attempts once a newer attempt exists", async () => {
+test("worker ingest job ignores superseded version 3 attempts once a newer attempt exists", async () => {
   const { organizationId, claimId, inboundMessageId, cleanup } = await createClaimFixture(
     "PROCESSING",
     {
       processingAttempt: 2,
+      processingLeaseToken: "lease-current-2",
     },
   );
   let extractionCalls = 0;
@@ -189,8 +190,8 @@ test("worker ingest job ignores stale version 2 attempts once a newer attempt ex
       prisma,
       TEST_CONFIG,
       buildQueueMessage({
-        version: 2,
         processingAttempt: 1,
+        processingLeaseToken: "lease-stale-1",
         organizationId,
         claimId,
         inboundMessageId,
@@ -231,7 +232,7 @@ test("worker ingest job ignores stale version 2 attempts once a newer attempt ex
         context: {
           claimId,
           organizationId,
-          messageVersion: 2,
+          messageVersion: 3,
           messageProcessingAttempt: 1,
           currentProcessingAttempt: 2,
         },
@@ -242,7 +243,7 @@ test("worker ingest job ignores stale version 2 attempts once a newer attempt ex
   }
 });
 
-test("worker ingest job retries version 2 attempts that arrive before the claim advance is recorded", async () => {
+test("worker ingest job fails closed when a version 3 attempt arrives before the claim advance is recorded", async () => {
   const { organizationId, claimId, inboundMessageId, cleanup } = await createClaimFixture("ERROR");
   let extractionCalls = 0;
 
@@ -253,8 +254,8 @@ test("worker ingest job retries version 2 attempts that arrive before the claim 
           prisma,
           TEST_CONFIG,
           buildQueueMessage({
-            version: 2,
             processingAttempt: 1,
+            processingLeaseToken: "lease-retry-too-early",
             organizationId,
             claimId,
             inboundMessageId,
@@ -267,8 +268,11 @@ test("worker ingest job retries version 2 attempts that arrive before the claim 
           },
         ),
       (error: unknown) => {
-        assert.equal((error as Error & { retryable?: unknown }).retryable, true);
-        assert.match(String((error as Error).message), /not ready for processing attempt 1/);
+        assert.equal((error as Error & { retryable?: unknown }).retryable, false);
+        assert.match(
+          String((error as Error).message),
+          /has not advanced to processing attempt 1/,
+        );
         return true;
       },
     );
@@ -369,21 +373,31 @@ test("worker ingest job ignores version 3 messages when the lease is already cla
   }
 });
 
-test("worker ingest job transitions NEW claims into PROCESSING before extraction", async () => {
-  const { organizationId, claimId, inboundMessageId, providerMessageId, cleanup } = await createClaimFixture("NEW");
+test("worker ingest job fails closed when a version 3 message targets a claim still in NEW", async () => {
+  const { organizationId, claimId, inboundMessageId, cleanup } = await createClaimFixture("NEW");
   let extractionCalls = 0;
 
   try {
-    await processClaimIngestJob(
-      prisma,
-      TEST_CONFIG,
-      buildQueueMessage({ organizationId, claimId, inboundMessageId, providerMessageId }),
-      {
-        extractClaimDataFn: async () => {
-          extractionCalls += 1;
-          return buildExtractionResult();
-        },
-        persistClaimExtractionOutcomeFn: async () => "REVIEW_REQUIRED",
+    await assert.rejects(
+      () =>
+        processClaimIngestJob(
+          prisma,
+          TEST_CONFIG,
+          buildQueueMessage({ organizationId, claimId, inboundMessageId }),
+          {
+            extractClaimDataFn: async () => {
+              extractionCalls += 1;
+              return buildExtractionResult();
+            },
+            persistClaimExtractionOutcomeFn: async () => {
+              throw new Error("NEW claims should not be revived by worker queue messages");
+            },
+          },
+        ),
+      (error: unknown) => {
+        assert.equal((error as Error & { retryable?: unknown }).retryable, false);
+        assert.match(String((error as Error).message), /is still NEW for processing attempt 1/);
+        return true;
       },
     );
 
@@ -393,21 +407,14 @@ test("worker ingest job transitions NEW claims into PROCESSING before extraction
         status: true,
         events: {
           where: { eventType: "STATUS_TRANSITION" },
-          select: { payload: true },
+          select: { id: true },
         },
       },
     });
 
-    assert.equal(extractionCalls, 1);
-    assert.equal(claim.status, "PROCESSING");
-    assert.equal(claim.events.length, 1);
-    assert.deepEqual(readPayloadRecord(claim.events[0]?.payload), {
-      fromStatus: "NEW",
-      toStatus: "PROCESSING",
-      source: "worker_ingest_start",
-      inboundMessageId,
-      providerMessageId,
-    });
+    assert.equal(extractionCalls, 0);
+    assert.equal(claim.status, "NEW");
+    assert.equal(claim.events.length, 0);
   } finally {
     await cleanup();
   }
@@ -728,49 +735,16 @@ test("worker ingest job logs textract re-extraction failures and keeps the prima
   }
 });
 
-function readPayloadRecord(value: unknown): Record<string, unknown> {
-  assert.equal(typeof value, "object");
-  assert.notEqual(value, null);
-  return value as Record<string, unknown>;
-}
-
 function buildQueueMessage(overrides: Partial<ClaimIngestQueueMessage>): ClaimIngestQueueMessage {
-  if (
-    overrides.version === 3 ||
-    (typeof overrides.processingAttempt === "number" &&
-      typeof overrides.processingLeaseToken === "string")
-  ) {
-    return {
-      version: 3,
-      claimId: overrides.claimId ?? "claim-default",
-      organizationId: overrides.organizationId ?? "org-default",
-      inboundMessageId: overrides.inboundMessageId ?? "inbound-default",
-      providerMessageId: overrides.providerMessageId ?? "provider-default",
-      enqueuedAt: overrides.enqueuedAt ?? "2026-03-05T12:00:00.000Z",
-      processingAttempt: overrides.processingAttempt ?? 1,
-      processingLeaseToken: overrides.processingLeaseToken ?? "lease-default",
-    };
-  }
-
-  if (overrides.version === 2 || typeof overrides.processingAttempt === "number") {
-    return {
-      version: 2,
-      claimId: overrides.claimId ?? "claim-default",
-      organizationId: overrides.organizationId ?? "org-default",
-      inboundMessageId: overrides.inboundMessageId ?? "inbound-default",
-      providerMessageId: overrides.providerMessageId ?? "provider-default",
-      enqueuedAt: overrides.enqueuedAt ?? "2026-03-05T12:00:00.000Z",
-      processingAttempt: overrides.processingAttempt ?? 1,
-    };
-  }
-
   return {
-    version: 1,
+    version: 3,
     claimId: overrides.claimId ?? "claim-default",
     organizationId: overrides.organizationId ?? "org-default",
     inboundMessageId: overrides.inboundMessageId ?? "inbound-default",
     providerMessageId: overrides.providerMessageId ?? "provider-default",
     enqueuedAt: overrides.enqueuedAt ?? "2026-03-05T12:00:00.000Z",
+    processingAttempt: overrides.processingAttempt ?? 1,
+    processingLeaseToken: overrides.processingLeaseToken ?? "lease-default",
   };
 }
 
@@ -815,6 +789,11 @@ async function createClaimFixture(
   } = {},
 ) {
   const suffix = randomUUID();
+  const processingAttempt =
+    options.processingAttempt ?? (status === "PROCESSING" ? 1 : 0);
+  const processingLeaseToken =
+    options.processingLeaseToken ??
+    (status === "PROCESSING" && processingAttempt > 0 ? "lease-default" : null);
   const organization = await prisma.organization.create({
     data: {
       name: `Worker Ingest Job ${suffix}`,
@@ -831,8 +810,8 @@ async function createClaimFixture(
       externalClaimId: `claim-${suffix}`,
       sourceEmail: `worker-${suffix}@example.com`,
       status,
-      processingAttempt: options.processingAttempt ?? 0,
-      processingLeaseToken: options.processingLeaseToken ?? null,
+      processingAttempt,
+      processingLeaseToken,
       processingLeaseClaimedAt: options.processingLeaseClaimedAt ?? null,
       issueSummary: "Worker ingest job fixture",
     },

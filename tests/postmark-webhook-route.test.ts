@@ -283,6 +283,126 @@ test("postmark webhook persists stored attachments and returns attachment counts
   );
 });
 
+test("postmark webhook rejects malformed attachment base64 and records the attachment as failed", async () => {
+  const suffix = randomUUID();
+  const mailboxHash = `mailbox-${suffix}`;
+  const providerMessageId = `message-${suffix}`;
+  const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+  const storedObjects: Array<{ key: string }> = [];
+
+  await withEnv(
+    {
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+    },
+    async () => {
+      const handler = createPostmarkInboundHandler({
+        prismaClient: prisma,
+        maybeEnqueueClaimForProcessingFn: async () => ({
+          enqueued: false,
+          reason: "queue_not_configured",
+        }),
+        putAttachmentObjectFn: async (input) => {
+          storedObjects.push({ key: input.key });
+          return {
+            bucket: "test-bucket",
+            key: `test-prefix/${input.key}`,
+          };
+        },
+      });
+
+      const organization = await prisma.organization.create({
+        data: {
+          name: `Webhook Invalid Attachment Test ${suffix}`,
+          slug: `webhook-invalid-attachment-test-${suffix}`,
+          integrationMailbox: {
+            create: {
+              provider: "POSTMARK",
+              mailboxHash,
+              emailAddress: `claims+${suffix}@example.com`,
+            },
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      try {
+        const response = await handler(
+          new Request("http://localhost/api/webhooks/postmark/inbound", {
+            method: "POST",
+            body: JSON.stringify({
+              MessageID: providerMessageId,
+              MailboxHash: mailboxHash,
+              From: `Customer <customer-${suffix}@example.com>`,
+              To: `claims+${suffix}@example.com`,
+              Subject: "Malformed attachment payload",
+              TextBody: "Attachment included.",
+              Attachments: [
+                {
+                  Name: "receipt.pdf",
+                  Content: "not-base64",
+                  ContentType: "application/pdf",
+                  ContentLength: 10,
+                },
+              ],
+            }),
+            headers: {
+              authorization: authHeader,
+              "content-type": "application/json",
+            },
+          }),
+        );
+
+        assert.equal(response.status, 200);
+        const body = (await response.json()) as Record<string, unknown>;
+        assert.equal(body.ok, true);
+        assert.deepEqual(body.attachments, {
+          received: 1,
+          stored: 0,
+          failed: 1,
+          errors: [
+            {
+              filename: "receipt.pdf",
+              message: "Attachment content is not valid base64.",
+            },
+          ],
+        });
+
+        assert.equal(storedObjects.length, 0);
+
+        const attachments = await prisma.claimAttachment.findMany({
+          where: {
+            organizationId: organization.id,
+          },
+          select: {
+            uploadStatus: true,
+            originalFilename: true,
+            byteSize: true,
+            errorMessage: true,
+          },
+        });
+
+        assert.equal(attachments.length, 1);
+        assert.equal(attachments[0]?.uploadStatus, "FAILED");
+        assert.equal(attachments[0]?.originalFilename, "receipt.pdf");
+        assert.equal(attachments[0]?.byteSize, 10);
+        assert.equal(
+          attachments[0]?.errorMessage,
+          "Attachment content is not valid base64.",
+        );
+      } finally {
+        await prisma.organization.delete({
+          where: {
+            id: organization.id,
+          },
+        });
+      }
+    },
+  );
+});
+
 test("postmark webhook returns 500 when enqueueing fails after persistence", async () => {
   const suffix = randomUUID();
   const mailboxHash = `mailbox-${suffix}`;

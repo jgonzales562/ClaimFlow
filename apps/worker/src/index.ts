@@ -2,6 +2,11 @@ import { markClaimAsError, releaseClaimProcessingLease } from "./claim-state.js"
 import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { processClaimIngestJob } from "./ingest-job.js";
 import {
+  cleanupDispatchedClaimIngestQueueOutbox,
+  DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_BATCH_SIZE,
+  dispatchPendingClaimIngestQueueOutbox,
+} from "@claimflow/db";
+import {
   captureWorkerException,
   initWorkerSentry,
   isWorkerSentryEnabled,
@@ -12,6 +17,7 @@ import { recoverStaleProcessingClaims } from "./processing-watchdog.js";
 import { handleClaimQueueMessage } from "./queue-handler.js";
 import {
   ReceiveMessageCommand,
+  SendMessageCommand,
   SQSClient,
 } from "@aws-sdk/client-sqs";
 import type { Message } from "@aws-sdk/client-sqs";
@@ -60,6 +66,7 @@ async function bootstrap(): Promise<void> {
 
 async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promise<void> {
   let shuttingDown = false;
+  let nextOutboxCleanupRunAt = 0;
   let nextWatchdogRunAt = 0;
 
   const handleSignal = (signal: NodeJS.Signals): void => {
@@ -76,6 +83,9 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
   logInfo("worker_started", {
     queueUrl: config.queueUrl,
     dlqUrl: config.dlqUrl,
+    ingestQueueOutboxCleanupBatchSize: config.ingestQueueOutboxCleanupBatchSize,
+    ingestQueueOutboxCleanupIntervalMs: config.ingestQueueOutboxCleanupIntervalMs,
+    ingestQueueOutboxRetentionHours: config.ingestQueueOutboxRetentionHours,
     processingStaleMinutes: config.processingStaleMinutes,
     processingWatchdogEnabled: config.processingWatchdogEnabled,
     processingWatchdogIntervalMs: config.processingWatchdogIntervalMs,
@@ -92,6 +102,32 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
   });
 
   while (!shuttingDown) {
+    if (Date.now() >= nextOutboxCleanupRunAt) {
+      nextOutboxCleanupRunAt = Date.now() + config.ingestQueueOutboxCleanupIntervalMs;
+
+      try {
+        const cleanupResult = await cleanupDispatchedClaimIngestQueueOutbox({
+          prismaClient: prisma,
+          olderThan: new Date(
+            Date.now() - config.ingestQueueOutboxRetentionHours * 60 * 60 * 1_000,
+          ),
+          batchSize: config.ingestQueueOutboxCleanupBatchSize,
+        });
+
+        if (cleanupResult.selectedCount > 0 || cleanupResult.deletedCount > 0) {
+          logInfo("claim_ingest_outbox_cleanup_completed", cleanupResult);
+        }
+      } catch (error: unknown) {
+        captureWorkerException(error, {
+          stage: "claim_ingest_outbox_cleanup",
+          queueUrl: config.queueUrl,
+        });
+        logError("claim_ingest_outbox_cleanup_failed", {
+          error: extractErrorMessage(error),
+        });
+      }
+    }
+
     if (config.processingWatchdogEnabled && Date.now() >= nextWatchdogRunAt) {
       nextWatchdogRunAt = Date.now() + config.processingWatchdogIntervalMs;
 
@@ -116,6 +152,46 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
           error: extractErrorMessage(error),
         });
       }
+    }
+
+    try {
+      const dispatchResult = await dispatchPendingClaimIngestQueueOutbox({
+        prismaClient: prisma,
+        batchSize: DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_BATCH_SIZE,
+        sendMessageFn: async (dispatchInput) => {
+          try {
+            const response = await sqsClient.send(
+              new SendMessageCommand({
+                QueueUrl: dispatchInput.queueUrl,
+                MessageBody: JSON.stringify(dispatchInput.message),
+                DelaySeconds: dispatchInput.delaySeconds,
+              }),
+            );
+
+            return {
+              ok: true,
+              sqsMessageId: typeof response.MessageId === "string" ? response.MessageId : null,
+            };
+          } catch (error: unknown) {
+            return {
+              ok: false,
+              error: extractErrorMessage(error),
+            };
+          }
+        },
+      });
+
+      if (dispatchResult.selectedCount > 0) {
+        logInfo("claim_ingest_outbox_dispatch_completed", dispatchResult);
+      }
+    } catch (error: unknown) {
+      captureWorkerException(error, {
+        stage: "claim_ingest_outbox_dispatch",
+        queueUrl: config.queueUrl,
+      });
+      logError("claim_ingest_outbox_dispatch_failed", {
+        error: extractErrorMessage(error),
+      });
     }
 
     let messages: Message[];

@@ -9,6 +9,8 @@ import {
 } from "./session";
 
 const INVALID_CREDENTIALS_MESSAGE = "Invalid email or password.";
+const MULTIPLE_MEMBERSHIPS_MESSAGE =
+  "User belongs to multiple organizations. Organization selection is required.";
 
 type CookieOptions = ReturnType<typeof getSessionCookieOptions>;
 
@@ -116,6 +118,15 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
         : buildLoginErrorRedirect(request, "no_membership");
     }
 
+    if (user.memberships.length > 1) {
+      return isJsonRequest
+        ? Response.json(
+            { error: MULTIPLE_MEMBERSHIPS_MESSAGE },
+            { status: 409 },
+          )
+        : buildLoginErrorRedirect(request, "multiple_memberships");
+    }
+
     if (!isMembershipRole(membership.role)) {
       return isJsonRequest
         ? Response.json(
@@ -190,18 +201,22 @@ async function parseJsonCredentials(
 async function parseFormCredentials(
   request: Request,
 ): Promise<{ email: string; password: string } | null> {
-  const formData = await request.formData();
-  const email = formData.get("email");
-  const password = formData.get("password");
-  if (typeof email !== "string" || typeof password !== "string") {
+  try {
+    const formData = await request.formData();
+    const email = formData.get("email");
+    const password = formData.get("password");
+    if (typeof email !== "string" || typeof password !== "string") {
+      return null;
+    }
+
+    if (!email.trim() || !password.trim()) {
+      return null;
+    }
+
+    return { email, password };
+  } catch {
     return null;
   }
-
-  if (!email.trim() || !password.trim()) {
-    return null;
-  }
-
-  return { email, password };
 }
 
 function readCredentialField(value: unknown, field: "email" | "password"): string | null {

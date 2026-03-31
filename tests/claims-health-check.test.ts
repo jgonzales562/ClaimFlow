@@ -17,6 +17,10 @@ test("claims health check returns success details for healthy responses", async 
               observedCount: 0,
               affectedOrganizations: 0,
             },
+            ingestQueueOutbox: {
+              dueCount: 0,
+              oldestDueAgeMinutes: null,
+            },
           },
         }),
         { status: 200, headers: { "content-type": "application/json" } },
@@ -27,7 +31,7 @@ test("claims health check returns success details for healthy responses", async 
   assert.equal(result.status, 200);
   assert.equal(
     result.summary,
-    "Claims health OK | 0 stale processing claims across 0 organizations | status=ok",
+    "Claims health OK | 0 stale processing claims across 0 organizations | 0 due outbox rows | status=ok",
   );
 });
 
@@ -46,6 +50,10 @@ test("claims health check returns failure details for degraded responses", async
               observedCount: 2,
               affectedOrganizations: 1,
             },
+            ingestQueueOutbox: {
+              dueCount: 3,
+              oldestDueAgeMinutes: 18,
+            },
           },
         }),
         { status: 503, headers: { "content-type": "application/json" } },
@@ -56,7 +64,7 @@ test("claims health check returns failure details for degraded responses", async
   assert.equal(result.status, 503);
   assert.equal(
     result.summary,
-    "Claims health check failed with 503 | status=degraded | 2 stale processing claims across 1 organizations",
+    "Claims health check failed with 503 | status=degraded | 2 stale processing claims across 1 organizations | 3 due outbox rows (oldest 18m)",
   );
 });
 

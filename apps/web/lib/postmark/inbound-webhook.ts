@@ -615,12 +615,24 @@ function sanitizeFilename(value: string): string {
   return sanitized.slice(0, 180);
 }
 
+const BASE64_CONTENT_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+
 function decodeBase64(value: string): Buffer | null {
   try {
-    const buffer = Buffer.from(value, "base64");
-    if (!buffer.length && value.length > 0) {
+    const normalized = value.replace(/\s+/g, "");
+    if (
+      normalized.length === 0 ||
+      normalized.length % 4 !== 0 ||
+      !BASE64_CONTENT_PATTERN.test(normalized)
+    ) {
       return null;
     }
+
+    const buffer = Buffer.from(normalized, "base64");
+    if (!buffer.length) {
+      return null;
+    }
+
     return buffer;
   } catch {
     return null;

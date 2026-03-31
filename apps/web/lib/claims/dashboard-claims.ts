@@ -1,4 +1,4 @@
-import { prisma } from "@claimflow/db";
+import { loadClaimIngestQueueOutboxSummary, prisma } from "@claimflow/db";
 import type { Prisma } from "@prisma/client";
 import {
   applyTimestampCursor,
@@ -36,6 +36,14 @@ export type DashboardOperationalSummary = {
   statusCounts: DashboardStatusCounts;
   staleProcessingCount: number;
   operationalActivity: DashboardOperationalActivity;
+  ingestQueueOutbox: {
+    pendingCount: number;
+    dueCount: number;
+    oldestPendingAgeMinutes: number | null;
+    oldestPendingCreatedAt: Date | null;
+    oldestDueAgeMinutes: number | null;
+    oldestDueAvailableAt: Date | null;
+  };
 };
 
 export type DashboardClaimsPage = DashboardOperationalSummary & {
@@ -140,12 +148,18 @@ export async function loadDashboardOperationalSummary(input: {
   const [
     statusSummary,
     operationalActivity,
+    ingestQueueOutbox,
   ] = await Promise.all([
     loadClaimStatusSummary({
       organizationId: input.organizationId,
       staleProcessingBefore,
     }),
     loadClaimOperationalActivity({
+      organizationId: input.organizationId,
+      now,
+    }),
+    loadClaimIngestQueueOutboxSummary({
+      prismaClient: prisma,
       organizationId: input.organizationId,
       now,
     }),
@@ -156,5 +170,6 @@ export async function loadDashboardOperationalSummary(input: {
     statusCounts: statusSummary.statusCounts,
     staleProcessingCount: statusSummary.staleProcessingCount,
     operationalActivity,
+    ingestQueueOutbox,
   };
 }

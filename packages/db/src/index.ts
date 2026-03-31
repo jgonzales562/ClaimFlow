@@ -5,6 +5,28 @@ export {
   recordProcessingRecoveryIfStale,
   startClaimProcessingAttemptIfCurrent,
 } from "./claim-processing.js";
+export {
+  CLAIM_INGEST_QUEUE_OUTBOX_DISPATCH_LEASE_TIMEOUT_MS,
+  DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_CLEANUP_BATCH_SIZE,
+  DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_BATCH_SIZE,
+  buildClaimIngestQueueMessage,
+  cleanupDispatchedClaimIngestQueueOutbox,
+  createClaimIngestQueueOutboxEntry,
+  dispatchClaimIngestQueueOutboxById,
+  dispatchPendingClaimIngestQueueOutbox,
+  getClaimIngestQueueAvailableAt,
+  loadClaimIngestQueueOutboxSummary,
+  normalizeClaimIngestQueueDelaySeconds,
+} from "./claim-ingest-queue-outbox.js";
+export type {
+  ClaimIngestQueueOutboxSummary,
+  ClaimIngestQueueMessageV3,
+  ClaimIngestQueueOutboxDispatchOutcome,
+  ClaimIngestQueueSendInput,
+  ClaimIngestQueueSendResult,
+  CleanupDispatchedClaimIngestQueueOutboxResult,
+  DispatchPendingClaimIngestQueueOutboxResult,
+} from "./claim-ingest-queue-outbox.js";
 export { recordClaimStatusTransition, transitionClaimStatusIfCurrent } from "./claim-status.js";
 
 const prismaGlobal = globalThis as unknown as {

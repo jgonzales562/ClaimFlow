@@ -1,4 +1,3 @@
-import { transitionClaimStatusIfCurrent } from "@claimflow/db";
 import type { Prisma, PrismaClient } from "@prisma/client";
 import {
   persistClaimExtractionOutcome,
@@ -124,104 +123,72 @@ export async function processClaimIngestJob(
     return;
   }
 
-  if (message.version === 2) {
-    if (claim.processingAttempt > message.processingAttempt) {
-      logInfoFn("claim_ingest_attempt_superseded", {
-        claimId: claim.id,
-        organizationId: claim.organizationId,
-        messageVersion: message.version,
-        messageProcessingAttempt: message.processingAttempt,
-        currentProcessingAttempt: claim.processingAttempt,
-      });
-      return;
-    }
+  if (claim.processingAttempt > message.processingAttempt) {
+    logInfoFn("claim_ingest_attempt_superseded", {
+      claimId: claim.id,
+      organizationId: claim.organizationId,
+      messageVersion: message.version,
+      messageProcessingAttempt: message.processingAttempt,
+      currentProcessingAttempt: claim.processingAttempt,
+    });
+    return;
+  }
 
-    if (claim.processingAttempt < message.processingAttempt) {
-      throw new WorkerMessageError(
-        `Claim "${claim.id}" is not ready for processing attempt ${message.processingAttempt}.`,
-        true,
-      );
-    }
+  if (claim.status === "NEW") {
+    throw new WorkerMessageError(
+      `Claim "${claim.id}" is still NEW for processing attempt ${message.processingAttempt}.`,
+      false,
+    );
+  }
 
-    if (claim.status !== "PROCESSING") {
-      return;
-    }
-  } else if (message.version === 3) {
-    if (claim.processingAttempt > message.processingAttempt) {
-      logInfoFn("claim_ingest_attempt_superseded", {
-        claimId: claim.id,
-        organizationId: claim.organizationId,
-        messageVersion: message.version,
-        messageProcessingAttempt: message.processingAttempt,
-        currentProcessingAttempt: claim.processingAttempt,
-      });
-      return;
-    }
+  if (claim.processingAttempt < message.processingAttempt) {
+    throw new WorkerMessageError(
+      `Claim "${claim.id}" has not advanced to processing attempt ${message.processingAttempt}.`,
+      false,
+    );
+  }
 
-    if (claim.processingAttempt < message.processingAttempt) {
-      throw new WorkerMessageError(
-        `Claim "${claim.id}" is not ready for processing attempt ${message.processingAttempt}.`,
-        true,
-      );
-    }
+  if (claim.status !== "PROCESSING") {
+    return;
+  }
 
-    if (claim.status !== "PROCESSING") {
-      return;
-    }
+  if (claim.processingLeaseToken !== message.processingLeaseToken) {
+    logInfoFn("claim_ingest_lease_superseded", {
+      claimId: claim.id,
+      organizationId: claim.organizationId,
+      processingAttempt: message.processingAttempt,
+      messageProcessingLeaseToken: message.processingLeaseToken,
+      currentProcessingLeaseToken: claim.processingLeaseToken,
+    });
+    return;
+  }
 
-    if (claim.processingLeaseToken !== message.processingLeaseToken) {
-      logInfoFn("claim_ingest_lease_superseded", {
-        claimId: claim.id,
-        organizationId: claim.organizationId,
-        processingAttempt: message.processingAttempt,
-        messageProcessingLeaseToken: message.processingLeaseToken,
-        currentProcessingLeaseToken: claim.processingLeaseToken,
-      });
-      return;
-    }
+  if (claim.processingLeaseClaimedAt) {
+    logInfoFn("claim_ingest_lease_already_claimed", {
+      claimId: claim.id,
+      organizationId: claim.organizationId,
+      processingAttempt: message.processingAttempt,
+      processingLeaseToken: message.processingLeaseToken,
+      processingLeaseClaimedAt: claim.processingLeaseClaimedAt.toISOString(),
+    });
+    return;
+  }
 
-    if (claim.processingLeaseClaimedAt) {
-      logInfoFn("claim_ingest_lease_already_claimed", {
-        claimId: claim.id,
-        organizationId: claim.organizationId,
-        processingAttempt: message.processingAttempt,
-        processingLeaseToken: message.processingLeaseToken,
-        processingLeaseClaimedAt: claim.processingLeaseClaimedAt.toISOString(),
-      });
-      return;
-    }
+  const leaseClaimed = await claimProcessingLeaseClaimedByWorker(prismaClient, {
+    claimId: claim.id,
+    organizationId: claim.organizationId,
+    processingAttempt: message.processingAttempt,
+    processingLeaseToken: message.processingLeaseToken,
+  });
 
-    const leaseClaimed = await claimProcessingLeaseClaimedByWorker(prismaClient, {
+  if (!leaseClaimed) {
+    logInfoFn("claim_ingest_lease_claim_conflict", {
       claimId: claim.id,
       organizationId: claim.organizationId,
       processingAttempt: message.processingAttempt,
       processingLeaseToken: message.processingLeaseToken,
     });
-
-    if (!leaseClaimed) {
-      logInfoFn("claim_ingest_lease_claim_conflict", {
-        claimId: claim.id,
-        organizationId: claim.organizationId,
-        processingAttempt: message.processingAttempt,
-        processingLeaseToken: message.processingLeaseToken,
-      });
-      return;
-    }
-  } else if (claim.status !== "PROCESSING") {
-    await prismaClient.$transaction(async (tx) => {
-      await transitionClaimStatusIfCurrent({
-        tx,
-        organizationId: claim.organizationId,
-        claimId: claim.id,
-        fromStatus: claim.status,
-        toStatus: "PROCESSING",
-        payload: {
-          source: "worker_ingest_start",
-          inboundMessageId: message.inboundMessageId,
-          providerMessageId: message.providerMessageId,
-        },
-      });
-    });
+    return;
   }
 
   const runExtraction = (supplementalText: string | null) =>
@@ -326,8 +293,8 @@ export async function processClaimIngestJob(
     textractMetadata,
     inboundTextChars,
     extractionReadyConfidence: config.extractionReadyConfidence,
-    processingAttempt: message.version === 1 ? undefined : message.processingAttempt,
-    processingLeaseToken: message.version === 3 ? message.processingLeaseToken : undefined,
+    processingAttempt: message.processingAttempt,
+    processingLeaseToken: message.processingLeaseToken,
   });
 }
 

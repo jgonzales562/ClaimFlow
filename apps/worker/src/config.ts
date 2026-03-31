@@ -4,6 +4,9 @@ export type WorkerConfig = ClaimIngestJobConfig & {
   awsRegion: string;
   queueUrl: string;
   dlqUrl: string | null;
+  ingestQueueOutboxCleanupBatchSize: number;
+  ingestQueueOutboxCleanupIntervalMs: number;
+  ingestQueueOutboxRetentionHours: number;
   processingStaleMinutes: number;
   processingWatchdogEnabled: boolean;
   processingWatchdogIntervalMs: number;
@@ -35,6 +38,24 @@ export function loadWorkerConfig(): WorkerConfig {
     awsRegion,
     queueUrl,
     dlqUrl: optionalEnv("CLAIMS_INGEST_DLQ_URL"),
+    ingestQueueOutboxCleanupBatchSize: parseIntegerEnv(
+      "CLAIMS_INGEST_OUTBOX_CLEANUP_BATCH_SIZE",
+      500,
+      1,
+      10_000,
+    ),
+    ingestQueueOutboxCleanupIntervalMs: parseIntegerEnv(
+      "CLAIMS_INGEST_OUTBOX_CLEANUP_INTERVAL_MS",
+      3_600_000,
+      60_000,
+      86_400_000,
+    ),
+    ingestQueueOutboxRetentionHours: parseIntegerEnv(
+      "CLAIMS_INGEST_OUTBOX_RETENTION_HOURS",
+      168,
+      1,
+      8_760,
+    ),
     processingStaleMinutes: parseIntegerEnv("CLAIMS_PROCESSING_STALE_MINUTES", 30, 1, 10_080),
     processingWatchdogEnabled: parseBooleanEnv("CLAIMS_PROCESSING_WATCHDOG_ENABLED", false),
     processingWatchdogIntervalMs: parseIntegerEnv(

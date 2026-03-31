@@ -1,5 +1,13 @@
-import { prisma, startClaimProcessingAttemptIfCurrent } from "@claimflow/db";
+import {
+  createClaimIngestQueueOutboxEntry,
+  dispatchClaimIngestQueueOutboxById,
+  getClaimIngestQueueAvailableAt,
+  prisma,
+  startClaimProcessingAttemptIfCurrent,
+  type ClaimIngestQueueSendResult,
+} from "@claimflow/db";
 import { randomUUID } from "node:crypto";
+import { enqueueClaimIngestJob, resolveClaimIngestQueueUrl } from "../queue/claims";
 
 type ClaimIngestEnqueueInput = {
   organizationId: string;
@@ -11,8 +19,12 @@ type ClaimIngestEnqueueInput = {
 
 type ClaimQueueEnqueueInput = Omit<ClaimIngestEnqueueInput, "shouldEnqueue" | "claimId"> & {
   claimId: string;
-  processingAttempt?: number;
-  processingLeaseToken?: string;
+  processingAttempt: number;
+  processingLeaseToken: string;
+  delaySeconds?: number;
+  messageId?: string;
+  queueUrl?: string;
+  enqueuedAt?: Date;
 };
 
 type ClaimQueueEnqueueFn = (
@@ -24,6 +36,7 @@ type ClaimQueueEnqueueResult =
       enqueued: true;
       queueUrl: string;
       messageId: string;
+      sqsMessageId?: string | null;
     }
   | {
       enqueued: false;
@@ -35,6 +48,8 @@ type ClaimQueueEnqueueResult =
 type ClaimIngestEnqueueDependencies = {
   prismaClient?: typeof prisma;
   enqueueClaimIngestJobFn?: ClaimQueueEnqueueFn;
+  resolveQueueUrlFn?: () => string | null;
+  createQueueMessageIdFn?: () => string;
   createProcessingLeaseTokenFn?: () => string;
 };
 
@@ -47,10 +62,18 @@ export async function maybeEnqueueClaimForProcessing(
   }
 
   const prismaClient = dependencies.prismaClient ?? prisma;
-  const enqueueClaimIngestJobFn =
-    dependencies.enqueueClaimIngestJobFn ?? defaultEnqueueClaimIngestJob;
+  const enqueueClaimIngestJobFn = dependencies.enqueueClaimIngestJobFn ?? enqueueClaimIngestJob;
+  const resolveQueueUrlFn = dependencies.resolveQueueUrlFn ?? resolveClaimIngestQueueUrl;
+  const createQueueMessageIdFn = dependencies.createQueueMessageIdFn ?? defaultCreateQueueMessageId;
   const createProcessingLeaseTokenFn =
     dependencies.createProcessingLeaseTokenFn ?? defaultCreateProcessingLeaseToken;
+  const queueUrl = resolveQueueUrlFn();
+  if (!queueUrl) {
+    return {
+      enqueued: false,
+      reason: "queue_not_configured",
+    };
+  }
   const claimId = input.claimId;
   const claim = await prismaClient.claim.findFirst({
     where: {
@@ -67,47 +90,94 @@ export async function maybeEnqueueClaimForProcessing(
     return null;
   }
 
-  const nextProcessingAttempt =
-    claim.status === "NEW" ? claim.processingAttempt + 1 : undefined;
-  const processingLeaseToken =
-    typeof nextProcessingAttempt === "number" ? createProcessingLeaseTokenFn() : undefined;
-
-  const queueResult = await enqueueClaimIngestJobFn({
-    claimId,
-    organizationId: input.organizationId,
-    inboundMessageId: input.inboundMessageId,
-    providerMessageId: input.providerMessageId,
-    processingAttempt: nextProcessingAttempt,
-    processingLeaseToken,
-  });
-
-  if (queueResult.enqueued && claim.status === "NEW") {
-    await prismaClient.$transaction(async (tx) => {
-      await startClaimProcessingAttemptIfCurrent({
-        tx,
-        organizationId: input.organizationId,
-        claimId,
-        expectedProcessingAttempt: claim.processingAttempt,
-        processingLeaseToken: processingLeaseToken ?? queueResult.messageId,
-        fromStatus: "NEW",
-        source: "webhook_enqueue",
-        queueMessageId: queueResult.messageId,
-        inboundMessageId: input.inboundMessageId,
-        providerMessageId: input.providerMessageId,
-      });
-    });
+  if (claim.status !== "NEW") {
+    return null;
   }
 
-  return queueResult;
-}
+  const queueMessageId = createQueueMessageIdFn();
+  const nextProcessingAttempt = claim.processingAttempt + 1;
+  const processingLeaseToken = createProcessingLeaseTokenFn();
+  const availableAt = getClaimIngestQueueAvailableAt(new Date());
+  const scheduled = await prismaClient.$transaction(async (tx) => {
+    const startedAttempt = await startClaimProcessingAttemptIfCurrent({
+      tx,
+      organizationId: input.organizationId,
+      claimId,
+      expectedProcessingAttempt: claim.processingAttempt,
+      processingLeaseToken,
+      fromStatus: "NEW",
+      source: "webhook_enqueue",
+      queueMessageId: queueMessageId,
+      inboundMessageId: input.inboundMessageId,
+      providerMessageId: input.providerMessageId,
+    });
 
-async function defaultEnqueueClaimIngestJob(
-  input: ClaimQueueEnqueueInput,
-): Promise<ClaimQueueEnqueueResult> {
-  const { enqueueClaimIngestJob } = await import("../queue/claims");
-  return enqueueClaimIngestJob(input);
+    if (startedAttempt === null) {
+      return false;
+    }
+
+    await createClaimIngestQueueOutboxEntry({
+      tx,
+      id: queueMessageId,
+      organizationId: input.organizationId,
+      claimId,
+      inboundMessageId: input.inboundMessageId,
+      providerMessageId: input.providerMessageId,
+      queueUrl,
+      processingAttempt: nextProcessingAttempt,
+      processingLeaseToken,
+      availableAt,
+    });
+
+    return true;
+  });
+
+  if (!scheduled) {
+    return null;
+  }
+
+  await dispatchClaimIngestQueueOutboxById(
+    {
+      prismaClient,
+      outboxId: queueMessageId,
+      sendMessageFn: async (dispatchInput): Promise<ClaimIngestQueueSendResult> => {
+        const queueResult = await enqueueClaimIngestJobFn({
+          claimId: dispatchInput.message.claimId,
+          organizationId: dispatchInput.message.organizationId,
+          inboundMessageId: dispatchInput.message.inboundMessageId,
+          providerMessageId: dispatchInput.message.providerMessageId,
+          processingAttempt: dispatchInput.message.processingAttempt,
+          processingLeaseToken: dispatchInput.message.processingLeaseToken,
+          delaySeconds: dispatchInput.delaySeconds,
+          messageId: queueMessageId,
+          queueUrl: dispatchInput.queueUrl,
+          enqueuedAt: new Date(dispatchInput.message.enqueuedAt),
+        });
+
+        return queueResult.enqueued
+          ? {
+              ok: true,
+              sqsMessageId: queueResult.sqsMessageId ?? null,
+            }
+          : {
+              ok: false,
+              error: queueResult.error ?? "Unknown queue dispatch failure.",
+            };
+      },
+    },
+  );
+
+  return {
+    enqueued: true,
+    queueUrl,
+    messageId: queueMessageId,
+  };
 }
 
 function defaultCreateProcessingLeaseToken(): string {
+  return randomUUID();
+}
+
+function defaultCreateQueueMessageId(): string {
   return randomUUID();
 }

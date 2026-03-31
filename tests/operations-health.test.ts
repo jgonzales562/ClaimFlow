@@ -87,6 +87,24 @@ test("claims operations health aggregates stale processing and recent recovery a
         createdAt: new Date("2026-03-11T17:10:00.000Z"),
       },
     });
+    await createOutboxEntry({
+      organizationId: firstOrg.organizationId,
+      claimId: firstReadyClaim.id,
+      availableAt: new Date("2026-03-11T17:10:00.000Z"),
+      createdAt: new Date("2026-03-11T17:00:00.000Z"),
+    });
+    await createOutboxEntry({
+      organizationId: firstOrg.organizationId,
+      claimId: firstStaleProcessingClaim.id,
+      availableAt: new Date("2026-03-11T18:20:00.000Z"),
+      createdAt: new Date("2026-03-11T17:55:00.000Z"),
+    });
+    await createOutboxEntry({
+      organizationId: secondOrg.organizationId,
+      claimId: secondReviewClaim.id,
+      availableAt: new Date("2026-03-11T17:40:00.000Z"),
+      createdAt: new Date("2026-03-11T17:30:00.000Z"),
+    });
 
     const snapshot = await loadClaimsOperationsHealthSnapshot({ now });
 
@@ -110,6 +128,13 @@ test("claims operations health aggregates stale processing and recent recovery a
         baseline.operationalActivity.manualProcessingRecoveryCount + 1,
       manualRetryCount: baseline.operationalActivity.manualRetryCount + 1,
     });
+    assert.equal(
+      snapshot.ingestQueueOutbox.pendingCount,
+      baseline.ingestQueueOutbox.pendingCount + 3,
+    );
+    assert.equal(snapshot.ingestQueueOutbox.dueCount, baseline.ingestQueueOutbox.dueCount + 2);
+    assert.notEqual(snapshot.ingestQueueOutbox.oldestPendingAgeMinutes, null);
+    assert.notEqual(snapshot.ingestQueueOutbox.oldestDueAgeMinutes, null);
   } finally {
     await Promise.all([firstOrg.cleanup(), secondOrg.cleanup()]);
   }
@@ -178,6 +203,29 @@ async function createHealthEvent(input: {
       payload: {
         source: input.source,
       },
+      createdAt: input.createdAt,
+    },
+  });
+}
+
+async function createOutboxEntry(input: {
+  organizationId: string;
+  claimId: string;
+  availableAt: Date;
+  createdAt: Date;
+}) {
+  const id = `outbox-${randomUUID()}`;
+  await prisma.claimIngestQueueOutbox.create({
+    data: {
+      id,
+      organizationId: input.organizationId,
+      claimId: input.claimId,
+      inboundMessageId: `inbound-${id}`,
+      providerMessageId: `provider-${id}`,
+      queueUrl: "https://example.invalid/claims",
+      processingAttempt: 1,
+      processingLeaseToken: `lease-${id}`,
+      availableAt: input.availableAt,
       createdAt: input.createdAt,
     },
   });

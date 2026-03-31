@@ -17,7 +17,7 @@ test("webhook enqueue transitions NEW claims to PROCESSING and records one event
   const { organizationId, claimId, cleanup } = await createClaimFixture("NEW");
   const inboundMessageId = `inbound-${randomUUID()}`;
   const providerMessageId = `provider-${randomUUID()}`;
-  const queueMessageId = `message-${randomUUID()}`;
+  const queueMessageId = `queue-${randomUUID()}`;
 
   try {
     const queueResult = await maybeEnqueueClaimForProcessing(
@@ -30,10 +30,13 @@ test("webhook enqueue transitions NEW claims to PROCESSING and records one event
       },
       {
         prismaClient: prisma,
+        resolveQueueUrlFn: () => "https://example.invalid/claims",
+        createQueueMessageIdFn: () => queueMessageId,
         enqueueClaimIngestJobFn: async () => ({
           enqueued: true,
           queueUrl: "https://example.invalid/claims",
-          messageId: queueMessageId,
+          messageId: "aws-message-id",
+          sqsMessageId: "aws-message-id",
         }),
       },
     );
@@ -75,6 +78,88 @@ test("webhook enqueue transitions NEW claims to PROCESSING and records one event
   }
 });
 
+test("webhook enqueue keeps claim processing scheduled when the immediate queue send fails", async () => {
+  const { organizationId, claimId, cleanup } = await createClaimFixture("NEW");
+  const inboundMessageId = `inbound-${randomUUID()}`;
+  const providerMessageId = `provider-${randomUUID()}`;
+  const queueMessageId = `queue-${randomUUID()}`;
+
+  try {
+    const queueResult = await maybeEnqueueClaimForProcessing(
+      {
+        organizationId,
+        claimId,
+        inboundMessageId,
+        providerMessageId,
+        shouldEnqueue: true,
+      },
+      {
+        prismaClient: prisma,
+        resolveQueueUrlFn: () => "https://example.invalid/claims",
+        createQueueMessageIdFn: () => queueMessageId,
+        enqueueClaimIngestJobFn: async () => ({
+          enqueued: false,
+          reason: "send_failed",
+          queueUrl: "https://example.invalid/claims",
+          error: "simulated queue failure",
+        }),
+      },
+    );
+
+    assert.deepEqual(queueResult, {
+      enqueued: true,
+      queueUrl: "https://example.invalid/claims",
+      messageId: queueMessageId,
+    });
+
+    const updatedClaim = await prisma.claim.findUniqueOrThrow({
+      where: { id: claimId },
+      select: {
+        status: true,
+        processingAttempt: true,
+        events: {
+          where: {
+            eventType: "STATUS_TRANSITION",
+          },
+          select: {
+            payload: true,
+          },
+        },
+        ingestQueueOutbox: {
+          select: {
+            id: true,
+            dispatchedAt: true,
+            dispatchAttempts: true,
+            lastDispatchError: true,
+          },
+        },
+      },
+    });
+
+    assert.equal(updatedClaim.status, "PROCESSING");
+    assert.equal(updatedClaim.processingAttempt, 1);
+    assert.equal(updatedClaim.events.length, 1);
+    assert.deepEqual(readPayloadRecord(updatedClaim.events[0]?.payload), {
+      fromStatus: "NEW",
+      toStatus: "PROCESSING",
+      source: "webhook_enqueue",
+      inboundMessageId,
+      providerMessageId,
+      queueMessageId,
+    });
+    assert.deepEqual(updatedClaim.ingestQueueOutbox, [
+      {
+        id: queueMessageId,
+        dispatchedAt: null,
+        dispatchAttempts: 1,
+        lastDispatchError: "simulated queue failure",
+      },
+    ]);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("webhook enqueue does not duplicate transitions for claims already processing", async () => {
   const { organizationId, claimId, cleanup } = await createClaimFixture("PROCESSING");
 
@@ -89,15 +174,16 @@ test("webhook enqueue does not duplicate transitions for claims already processi
       },
       {
         prismaClient: prisma,
+        resolveQueueUrlFn: () => "https://example.invalid/claims",
         enqueueClaimIngestJobFn: async () => ({
           enqueued: true,
           queueUrl: "https://example.invalid/claims",
-          messageId: `message-${randomUUID()}`,
+          messageId: `aws-message-${randomUUID()}`,
         }),
       },
     );
 
-    assert.equal(queueResult?.enqueued, true);
+    assert.equal(queueResult, null);
 
     const updatedClaim = await prisma.claim.findUniqueOrThrow({
       where: { id: claimId },

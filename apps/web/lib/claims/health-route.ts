@@ -3,6 +3,7 @@ import { captureWebException } from "@/lib/observability/sentry";
 import { extractErrorMessage, logError } from "@/lib/observability/log";
 import {
   getClaimsHealthBearerToken,
+  getClaimsHealthMaxDueOutboxCount,
   getClaimsHealthMaxStaleProcessingCount,
   getClaimsHealthStaleMinutes,
   isClaimsProcessingWatchdogEnabled,
@@ -15,6 +16,7 @@ type ClaimsHealthRouteDependencies = {
   logErrorFn?: typeof logError;
   nowFn?: () => Date;
   getBearerTokenFn?: typeof getClaimsHealthBearerToken;
+  getMaxDueOutboxCountFn?: typeof getClaimsHealthMaxDueOutboxCount;
   getMaxStaleProcessingCountFn?: typeof getClaimsHealthMaxStaleProcessingCount;
   getStaleMinutesFn?: typeof getClaimsHealthStaleMinutes;
   isProcessingWatchdogEnabledFn?: typeof isClaimsProcessingWatchdogEnabled;
@@ -30,6 +32,8 @@ export function createClaimsHealthHandler(
   const logErrorFn = dependencies.logErrorFn ?? logError;
   const nowFn = dependencies.nowFn ?? (() => new Date());
   const getBearerTokenFn = dependencies.getBearerTokenFn ?? getClaimsHealthBearerToken;
+  const getMaxDueOutboxCountFn =
+    dependencies.getMaxDueOutboxCountFn ?? getClaimsHealthMaxDueOutboxCount;
   const getMaxStaleProcessingCountFn =
     dependencies.getMaxStaleProcessingCountFn ?? getClaimsHealthMaxStaleProcessingCount;
   const getStaleMinutesFn = dependencies.getStaleMinutesFn ?? getClaimsHealthStaleMinutes;
@@ -61,6 +65,7 @@ export function createClaimsHealthHandler(
 
     try {
       const generatedAt = nowFn();
+      const maxDueOutboxCount = getMaxDueOutboxCountFn();
       const maxStaleProcessingCount = getMaxStaleProcessingCountFn();
       const staleAfterMinutes = getStaleMinutesFn();
       const processingWatchdogEnabled = isProcessingWatchdogEnabledFn();
@@ -70,7 +75,12 @@ export function createClaimsHealthHandler(
 
       const staleProcessingStatus =
         summary.staleProcessingCount > maxStaleProcessingCount ? "degraded" : "ok";
-      const overallStatus = staleProcessingStatus;
+      const ingestQueueOutboxStatus =
+        summary.ingestQueueOutbox.dueCount > maxDueOutboxCount ? "degraded" : "ok";
+      const overallStatus =
+        staleProcessingStatus === "degraded" || ingestQueueOutboxStatus === "degraded"
+          ? "degraded"
+          : "ok";
 
       return Response.json(
         {
@@ -82,6 +92,7 @@ export function createClaimsHealthHandler(
             staleProcessingCount: summary.staleProcessingCount,
             staleProcessingOrganizationCount: summary.staleProcessingOrganizationCount,
             operationalActivity: summary.operationalActivity,
+            ingestQueueOutbox: summary.ingestQueueOutbox,
           },
           checks: {
             staleProcessing: {
@@ -90,6 +101,14 @@ export function createClaimsHealthHandler(
               affectedOrganizations: summary.staleProcessingOrganizationCount,
               threshold: maxStaleProcessingCount,
               staleAfterMinutes,
+            },
+            ingestQueueOutbox: {
+              status: ingestQueueOutboxStatus,
+              pendingCount: summary.ingestQueueOutbox.pendingCount,
+              dueCount: summary.ingestQueueOutbox.dueCount,
+              threshold: maxDueOutboxCount,
+              oldestPendingAgeMinutes: summary.ingestQueueOutbox.oldestPendingAgeMinutes,
+              oldestDueAgeMinutes: summary.ingestQueueOutbox.oldestDueAgeMinutes,
             },
             processingWatchdog: {
               enabled: processingWatchdogEnabled,

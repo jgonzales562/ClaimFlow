@@ -1,19 +1,24 @@
 import { SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
+import {
+  buildClaimIngestQueueMessage,
+  type ClaimIngestQueueSendInput,
+  type ClaimIngestQueueSendResult,
+  normalizeClaimIngestQueueDelaySeconds,
+} from "@claimflow/db";
+import { randomUUID } from "node:crypto";
 import { extractErrorMessage } from "@/lib/observability/log";
 
-type ClaimIngestQueueMessage = {
-  version: 1 | 2 | 3;
+type ClaimQueueEnqueueInput = {
   claimId: string;
   organizationId: string;
   inboundMessageId: string;
   providerMessageId: string;
-  enqueuedAt: string;
-  processingAttempt?: number;
-  processingLeaseToken?: string;
-};
-
-type ClaimQueueEnqueueInput = Omit<ClaimIngestQueueMessage, "version" | "enqueuedAt"> & {
+  processingAttempt: number;
+  processingLeaseToken: string;
   delaySeconds?: number;
+  messageId?: string;
+  queueUrl?: string;
+  enqueuedAt?: Date;
 };
 
 export type ClaimQueueEnqueueResult =
@@ -21,6 +26,7 @@ export type ClaimQueueEnqueueResult =
       enqueued: true;
       queueUrl: string;
       messageId: string;
+      sqsMessageId?: string | null;
     }
   | {
       enqueued: false;
@@ -34,8 +40,7 @@ let sqsClientSingleton: SQSClient | undefined;
 export async function enqueueClaimIngestJob(
   input: ClaimQueueEnqueueInput,
 ): Promise<ClaimQueueEnqueueResult> {
-  const { delaySeconds, ...messageInput } = input;
-  const queueUrl = process.env.CLAIMS_INGEST_QUEUE_URL?.trim();
+  const queueUrl = input.queueUrl ?? resolveClaimIngestQueueUrl();
   if (!queueUrl) {
     return {
       enqueued: false,
@@ -43,59 +48,70 @@ export async function enqueueClaimIngestJob(
     };
   }
 
-  const message: ClaimIngestQueueMessage = {
-    version:
-      typeof messageInput.processingAttempt === "number" &&
-      Number.isInteger(messageInput.processingAttempt) &&
-      messageInput.processingAttempt > 0
-        ? typeof messageInput.processingLeaseToken === "string" &&
-          messageInput.processingLeaseToken.trim().length > 0
-          ? 3
-          : 2
-        : 1,
-    ...messageInput,
-    enqueuedAt: new Date().toISOString(),
-  };
+  const messageId = normalizeMessageId(input.messageId);
+  const sendResult = await sendClaimIngestQueueMessage({
+    queueUrl,
+    message: buildClaimIngestQueueMessage({
+      claimId: input.claimId,
+      organizationId: input.organizationId,
+      inboundMessageId: input.inboundMessageId,
+      providerMessageId: input.providerMessageId,
+      enqueuedAt: input.enqueuedAt ?? new Date(),
+      processingAttempt: input.processingAttempt,
+      processingLeaseToken: input.processingLeaseToken,
+    }),
+    delaySeconds: input.delaySeconds,
+  });
 
-  try {
-    const response = await getSqsClient().send(
-      new SendMessageCommand({
-        QueueUrl: queueUrl,
-        MessageBody: JSON.stringify(message),
-        DelaySeconds: normalizeDelaySeconds(delaySeconds),
-      }),
-    );
-
-    if (!response.MessageId) {
-      return {
-        enqueued: false,
-        reason: "send_failed",
-        queueUrl,
-        error: "SQS did not return a MessageId.",
-      };
-    }
-
-    return {
-      enqueued: true,
-      queueUrl,
-      messageId: response.MessageId,
-    };
-  } catch (error: unknown) {
+  if (!sendResult.ok) {
     return {
       enqueued: false,
       reason: "send_failed",
       queueUrl,
+      error: sendResult.error,
+    };
+  }
+
+  return {
+    enqueued: true,
+    queueUrl,
+    messageId,
+    sqsMessageId: sendResult.sqsMessageId ?? null,
+  };
+}
+
+export function resolveClaimIngestQueueUrl(): string | null {
+  const queueUrl = process.env.CLAIMS_INGEST_QUEUE_URL?.trim();
+  return queueUrl ? queueUrl : null;
+}
+
+export async function sendClaimIngestQueueMessage(
+  input: ClaimIngestQueueSendInput,
+): Promise<ClaimIngestQueueSendResult> {
+  try {
+    const response = await getSqsClient().send(
+      new SendMessageCommand({
+        QueueUrl: input.queueUrl,
+        MessageBody: JSON.stringify(input.message),
+        DelaySeconds: normalizeClaimIngestQueueDelaySeconds(input.delaySeconds),
+      }),
+    );
+
+    return {
+      ok: true,
+      sqsMessageId: typeof response.MessageId === "string" ? response.MessageId : null,
+    };
+  } catch (error: unknown) {
+    return {
+      ok: false,
       error: extractErrorMessage(error, "Unknown SQS send error."),
     };
   }
 }
 
-function normalizeDelaySeconds(value: number | undefined): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-
-  return Math.min(Math.max(Math.floor(value), 0), 900);
+function normalizeMessageId(value: string | undefined): string {
+  const messageId = value?.trim();
+  return messageId && messageId.length > 0 ? messageId : randomUUID();
 }
 
 function getSqsClient(): SQSClient {

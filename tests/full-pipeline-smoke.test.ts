@@ -26,6 +26,7 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
   const suffix = randomUUID();
   const mailboxHash = `mailbox-${suffix}`;
   const providerMessageId = `message-${suffix}`;
+  const queueMessageId = `queue-${suffix}`;
   const authHeader = `Basic ${Buffer.from("smoke-user:smoke-pass").toString("base64")}`;
   let capturedQueueMessage: ClaimIngestQueueMessage | null = null;
   const queueTransport = createQueueTransportRecorder();
@@ -58,6 +59,8 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
         maybeEnqueueClaimForProcessingFn: (input) =>
           maybeEnqueueClaimForProcessing(input, {
             prismaClient: prisma,
+            resolveQueueUrlFn: () => "https://example.invalid/claims",
+            createQueueMessageIdFn: () => queueMessageId,
             enqueueClaimIngestJobFn: async (queueInput) => {
               capturedQueueMessage = buildEnqueuedQueueMessage(
                 queueInput,
@@ -67,7 +70,8 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
               return {
                 enqueued: true,
                 queueUrl: "https://example.invalid/claims",
-                messageId: `sqs-${suffix}`,
+                messageId: String(queueInput.messageId ?? queueMessageId),
+                sqsMessageId: `sqs-${suffix}`,
               };
             },
           }),
@@ -111,7 +115,7 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
         assert.deepEqual(body.queue, {
           enqueued: true,
           queueUrl: "https://example.invalid/claims",
-          messageId: `sqs-${suffix}`,
+          messageId: queueMessageId,
         });
 
         assert.notEqual(capturedQueueMessage, null);
@@ -227,7 +231,7 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
           source: "webhook_enqueue",
           inboundMessageId,
           providerMessageId,
-          queueMessageId: `sqs-${suffix}`,
+          queueMessageId,
         });
         const workerEventPayload = readPayloadRecord(claim.events[1]?.payload);
         assert.equal(workerEventPayload.fromStatus, "PROCESSING");
@@ -251,6 +255,7 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
   const suffix = randomUUID();
   const mailboxHash = `mailbox-${suffix}`;
   const providerMessageId = `message-${suffix}`;
+  const queueMessageId = `queue-failure-${suffix}`;
   const authHeader = `Basic ${Buffer.from("smoke-user:smoke-pass").toString("base64")}`;
   let capturedQueueMessage: ClaimIngestQueueMessage | null = null;
   const queueTransport = createQueueTransportRecorder();
@@ -283,6 +288,8 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
         maybeEnqueueClaimForProcessingFn: (input) =>
           maybeEnqueueClaimForProcessing(input, {
             prismaClient: prisma,
+            resolveQueueUrlFn: () => "https://example.invalid/claims",
+            createQueueMessageIdFn: () => queueMessageId,
             enqueueClaimIngestJobFn: async (queueInput) => {
               capturedQueueMessage = buildEnqueuedQueueMessage(
                 queueInput,
@@ -292,7 +299,8 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
               return {
                 enqueued: true,
                 queueUrl: "https://example.invalid/claims",
-                messageId: `sqs-failure-${suffix}`,
+                messageId: String(queueInput.messageId ?? queueMessageId),
+                sqsMessageId: `sqs-failure-${suffix}`,
               };
             },
           }),
@@ -329,7 +337,7 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
         assert.deepEqual(body.queue, {
           enqueued: true,
           queueUrl: "https://example.invalid/claims",
-          messageId: `sqs-failure-${suffix}`,
+          messageId: queueMessageId,
         });
 
         assert.notEqual(capturedQueueMessage, null);
@@ -415,7 +423,7 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
           source: "webhook_enqueue",
           inboundMessageId,
           providerMessageId,
-          queueMessageId: `sqs-failure-${suffix}`,
+          queueMessageId,
         });
 
         const workerFailurePayload = readPayloadRecord(claim.events[1]?.payload);
@@ -441,6 +449,7 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
   const suffix = randomUUID();
   const mailboxHash = `mailbox-${suffix}`;
   const providerMessageId = `message-${suffix}`;
+  const queueMessageId = `queue-dlq-failure-${suffix}`;
   const authHeader = `Basic ${Buffer.from("smoke-user:smoke-pass").toString("base64")}`;
   let capturedQueueMessage: ClaimIngestQueueMessage | null = null;
   const queueTransport = createQueueTransportRecorder({
@@ -475,6 +484,8 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
         maybeEnqueueClaimForProcessingFn: (input) =>
           maybeEnqueueClaimForProcessing(input, {
             prismaClient: prisma,
+            resolveQueueUrlFn: () => "https://example.invalid/claims",
+            createQueueMessageIdFn: () => queueMessageId,
             enqueueClaimIngestJobFn: async (queueInput) => {
               capturedQueueMessage = buildEnqueuedQueueMessage(
                 queueInput,
@@ -484,7 +495,8 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
               return {
                 enqueued: true,
                 queueUrl: "https://example.invalid/claims",
-                messageId: `sqs-dlq-failure-${suffix}`,
+                messageId: String(queueInput.messageId ?? queueMessageId),
+                sqsMessageId: `sqs-dlq-failure-${suffix}`,
               };
             },
           }),
@@ -521,7 +533,7 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
         assert.deepEqual(body.queue, {
           enqueued: true,
           queueUrl: "https://example.invalid/claims",
-          messageId: `sqs-dlq-failure-${suffix}`,
+          messageId: queueMessageId,
         });
 
         assert.notEqual(capturedQueueMessage, null);
@@ -596,7 +608,7 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
           source: "webhook_enqueue",
           inboundMessageId,
           providerMessageId,
-          queueMessageId: `sqs-dlq-failure-${suffix}`,
+          queueMessageId,
         });
       } finally {
         await prisma.organization.delete({
@@ -670,53 +682,20 @@ function buildEnqueuedQueueMessage(
     organizationId: string;
     inboundMessageId: string;
     providerMessageId: string;
-    processingAttempt?: number;
-    processingLeaseToken?: string;
+    processingAttempt: number;
+    processingLeaseToken: string;
   },
   enqueuedAt: string,
 ): ClaimIngestQueueMessage {
-  if (
-    typeof input.processingAttempt === "number" &&
-    Number.isInteger(input.processingAttempt) &&
-    input.processingAttempt > 0 &&
-    typeof input.processingLeaseToken === "string" &&
-    input.processingLeaseToken.length > 0
-  ) {
-    return {
-      version: 3,
-      claimId: input.claimId,
-      organizationId: input.organizationId,
-      inboundMessageId: input.inboundMessageId,
-      providerMessageId: input.providerMessageId,
-      enqueuedAt,
-      processingAttempt: input.processingAttempt,
-      processingLeaseToken: input.processingLeaseToken,
-    };
-  }
-
-  if (
-    typeof input.processingAttempt === "number" &&
-    Number.isInteger(input.processingAttempt) &&
-    input.processingAttempt > 0
-  ) {
-    return {
-      version: 2,
-      claimId: input.claimId,
-      organizationId: input.organizationId,
-      inboundMessageId: input.inboundMessageId,
-      providerMessageId: input.providerMessageId,
-      enqueuedAt,
-      processingAttempt: input.processingAttempt,
-    };
-  }
-
   return {
-    version: 1,
+    version: 3,
     claimId: input.claimId,
     organizationId: input.organizationId,
     inboundMessageId: input.inboundMessageId,
     providerMessageId: input.providerMessageId,
     enqueuedAt,
+    processingAttempt: input.processingAttempt,
+    processingLeaseToken: input.processingLeaseToken,
   };
 }
 

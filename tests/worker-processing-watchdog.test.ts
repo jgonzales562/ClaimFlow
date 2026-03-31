@@ -28,7 +28,7 @@ test("processing watchdog re-enqueues stale claims and records an automatic reco
           send: async (command) => {
             sentCommands.push((command as { input: Record<string, unknown> }).input);
             return {
-              MessageId: "watchdog-message-1",
+              MessageId: "aws-watchdog-message-1",
             };
           },
         },
@@ -36,6 +36,7 @@ test("processing watchdog re-enqueues stale claims and records an automatic reco
       },
       {
         nowFn: () => now,
+        createQueueMessageIdFn: () => "watchdog-queue-1",
         createProcessingLeaseTokenFn: () => "lease-watchdog-1",
         logInfoFn: (event, context) => {
           loggedInfo.push({ event, context });
@@ -97,7 +98,7 @@ test("processing watchdog re-enqueues stale claims and records an automatic reco
       organizationId,
       previousProcessingAttempt: 0,
       nextProcessingAttempt: 1,
-      queueMessageId: "watchdog-message-1",
+      queueMessageId: "watchdog-queue-1",
       inboundMessageId,
       providerMessageId,
     });
@@ -105,7 +106,7 @@ test("processing watchdog re-enqueues stale claims and records an automatic reco
       fromStatus: "PROCESSING",
       toStatus: "PROCESSING",
       source: "watchdog_processing_recovery",
-      queueMessageId: "watchdog-message-1",
+      queueMessageId: "watchdog-queue-1",
       inboundMessageId,
       providerMessageId,
       staleMinutes: 30,

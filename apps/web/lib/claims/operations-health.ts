@@ -1,3 +1,4 @@
+import { loadClaimIngestQueueOutboxSummary, prisma } from "@claimflow/db";
 import type { ClaimStatus } from "./filters";
 import { type DashboardOperationalActivity } from "./dashboard-claims";
 import { loadClaimOperationalActivity } from "./operational-activity";
@@ -10,9 +11,18 @@ export type ClaimsOperationsHealthSnapshot = {
   staleProcessingCount: number;
   staleProcessingOrganizationCount: number;
   operationalActivity: DashboardOperationalActivity;
+  ingestQueueOutbox: {
+    pendingCount: number;
+    dueCount: number;
+    oldestPendingAgeMinutes: number | null;
+    oldestPendingCreatedAt: Date | null;
+    oldestDueAgeMinutes: number | null;
+    oldestDueAvailableAt: Date | null;
+  };
 };
 
 const DEFAULT_MAX_STALE_PROCESSING_COUNT = 0;
+const DEFAULT_MAX_DUE_OUTBOX_COUNT = 0;
 
 export async function loadClaimsOperationsHealthSnapshot(input: {
   now?: Date;
@@ -23,11 +33,16 @@ export async function loadClaimsOperationsHealthSnapshot(input: {
   const [
     statusSummary,
     operationalActivity,
+    ingestQueueOutbox,
   ] = await Promise.all([
     loadClaimStatusSummary({
       staleProcessingBefore,
     }),
     loadClaimOperationalActivity({
+      now,
+    }),
+    loadClaimIngestQueueOutboxSummary({
+      prismaClient: prisma,
       now,
     }),
   ]);
@@ -38,6 +53,7 @@ export async function loadClaimsOperationsHealthSnapshot(input: {
     staleProcessingCount: statusSummary.staleProcessingCount,
     staleProcessingOrganizationCount: statusSummary.staleProcessingOrganizationCount,
     operationalActivity,
+    ingestQueueOutbox,
   };
 }
 
@@ -60,6 +76,22 @@ export function getClaimsHealthMaxStaleProcessingCount(): number {
 export function getClaimsHealthBearerToken(): string | null {
   const token = process.env.CLAIMS_HEALTH_BEARER_TOKEN?.trim();
   return token ? token : null;
+}
+
+export function getClaimsHealthMaxDueOutboxCount(): number {
+  const raw = process.env.CLAIMS_HEALTH_MAX_DUE_OUTBOX_COUNT?.trim();
+  if (!raw) {
+    return DEFAULT_MAX_DUE_OUTBOX_COUNT;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1_000_000) {
+    throw new Error(
+      "CLAIMS_HEALTH_MAX_DUE_OUTBOX_COUNT must be an integer between 0 and 1000000.",
+    );
+  }
+
+  return parsed;
 }
 
 export function isClaimsProcessingWatchdogEnabled(): boolean {

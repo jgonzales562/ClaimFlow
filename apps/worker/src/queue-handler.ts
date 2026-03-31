@@ -180,11 +180,9 @@ function isClaimIngestQueueMessage(value: unknown): value is ClaimIngestQueueMes
 
   const record = value as Record<string, unknown>;
   return (
-    (record.version === 1 ||
-      (record.version === 2 && hasPositiveInteger(record.processingAttempt)) ||
-      (record.version === 3 &&
-        hasPositiveInteger(record.processingAttempt) &&
-        hasNonEmptyString(record.processingLeaseToken))) &&
+    record.version === 3 &&
+    hasPositiveInteger(record.processingAttempt) &&
+    hasNonEmptyString(record.processingLeaseToken) &&
     hasNonEmptyString(record.claimId) &&
     hasNonEmptyString(record.organizationId) &&
     hasNonEmptyString(record.inboundMessageId) &&

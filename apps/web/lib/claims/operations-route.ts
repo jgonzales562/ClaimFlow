@@ -45,6 +45,8 @@ export function createClaimsOperationsHandler(
         organizationId: auth.organizationId,
         userId: auth.userId,
         staleProcessingCount: summary.staleProcessingCount,
+        ingestQueueOutboxPendingCount: summary.ingestQueueOutbox.pendingCount,
+        ingestQueueOutboxDueCount: summary.ingestQueueOutbox.dueCount,
         watchdogRecoveryCount: summary.operationalActivity.watchdogRecoveryCount,
         manualProcessingRecoveryCount: summary.operationalActivity.manualProcessingRecoveryCount,
         manualRetryCount: summary.operationalActivity.manualRetryCount,
@@ -58,6 +60,7 @@ export function createClaimsOperationsHandler(
         statusCounts: summary.statusCounts,
         staleProcessingCount: summary.staleProcessingCount,
         operationalActivity: summary.operationalActivity,
+        ingestQueueOutbox: summary.ingestQueueOutbox,
       });
     } catch (error: unknown) {
       captureWebExceptionFn(error, {

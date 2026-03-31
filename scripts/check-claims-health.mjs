@@ -51,12 +51,19 @@ export function buildSummary(status, body, fallbackText = "") {
     "staleProcessing",
     "affectedOrganizations",
   ]);
+  const dueOutboxCount = readNumber(body, ["checks", "ingestQueueOutbox", "dueCount"]);
+  const oldestDueOutboxAgeMinutes = readNumber(body, [
+    "checks",
+    "ingestQueueOutbox",
+    "oldestDueAgeMinutes",
+  ]);
   const overallStatus = readString(body, ["status"]);
 
   if (status >= 200 && status < 300) {
     return [
       "Claims health OK",
       formatStaleCounts(staleProcessing, affectedOrganizations),
+      formatOutboxCounts(dueOutboxCount, oldestDueOutboxAgeMinutes),
       overallStatus ? `status=${overallStatus}` : null,
     ]
       .filter(Boolean)
@@ -68,6 +75,7 @@ export function buildSummary(status, body, fallbackText = "") {
     `Claims health check failed with ${status}`,
     overallStatus ? `status=${overallStatus}` : null,
     formatStaleCounts(staleProcessing, affectedOrganizations),
+    formatOutboxCounts(dueOutboxCount, oldestDueOutboxAgeMinutes),
     errorMessage,
     !body && fallbackText ? fallbackText.trim().slice(0, 200) : null,
   ]
@@ -85,6 +93,18 @@ function formatStaleCounts(staleProcessing, affectedOrganizations) {
   }
 
   return `${staleProcessing} stale processing claims`;
+}
+
+function formatOutboxCounts(dueOutboxCount, oldestDueOutboxAgeMinutes) {
+  if (typeof dueOutboxCount !== "number") {
+    return null;
+  }
+
+  if (typeof oldestDueOutboxAgeMinutes === "number") {
+    return `${dueOutboxCount} due outbox rows (oldest ${oldestDueOutboxAgeMinutes}m)`;
+  }
+
+  return `${dueOutboxCount} due outbox rows`;
 }
 
 function readRequiredEnv(env, name) {

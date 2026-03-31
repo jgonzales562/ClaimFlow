@@ -55,6 +55,14 @@ test("claims operations returns a machine-readable snapshot", async () => {
         manualProcessingRecoveryCount: 1,
         manualRetryCount: 4,
       },
+      ingestQueueOutbox: {
+        pendingCount: 2,
+        dueCount: 1,
+        oldestPendingAgeMinutes: 12,
+        oldestPendingCreatedAt: new Date("2026-03-07T11:48:00.000Z"),
+        oldestDueAgeMinutes: 7,
+        oldestDueAvailableAt: new Date("2026-03-07T11:53:00.000Z"),
+      },
     }),
     nowFn: () => new Date("2026-03-07T12:00:00.000Z"),
     logInfoFn: (event, context) => {
@@ -85,6 +93,14 @@ test("claims operations returns a machine-readable snapshot", async () => {
       manualProcessingRecoveryCount: 1,
       manualRetryCount: 4,
     },
+    ingestQueueOutbox: {
+      pendingCount: 2,
+      dueCount: 1,
+      oldestPendingAgeMinutes: 12,
+      oldestPendingCreatedAt: "2026-03-07T11:48:00.000Z",
+      oldestDueAgeMinutes: 7,
+      oldestDueAvailableAt: "2026-03-07T11:53:00.000Z",
+    },
   });
   assert.deepEqual(loggedInfo, [
     {
@@ -93,6 +109,8 @@ test("claims operations returns a machine-readable snapshot", async () => {
         organizationId: "org-ops-test",
         userId: "user-ops-test",
         staleProcessingCount: 3,
+        ingestQueueOutboxPendingCount: 2,
+        ingestQueueOutboxDueCount: 1,
         watchdogRecoveryCount: 2,
         manualProcessingRecoveryCount: 1,
         manualRetryCount: 4,

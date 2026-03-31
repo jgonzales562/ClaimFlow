@@ -36,6 +36,8 @@ test("recoverStaleProcessingClaim re-enqueues stale processing claims and record
         prismaClient: prisma,
         nowFn: () => now,
         staleMinutes: 30,
+        resolveQueueUrlFn: () => "https://example.invalid/claims",
+        createQueueMessageIdFn: () => "queue-recovery-1",
         createProcessingLeaseTokenFn: () => "lease-recovery-1",
         enqueueClaimIngestJobFn: async (input) => {
           enqueueCalls.push(input as unknown as Record<string, unknown>);
@@ -53,17 +55,17 @@ test("recoverStaleProcessingClaim re-enqueues stale processing claims and record
       claimId,
     });
 
-    assert.deepEqual(enqueueCalls, [
-      {
-        claimId,
-        organizationId,
-        inboundMessageId,
-        providerMessageId,
-        processingAttempt: 1,
-        processingLeaseToken: "lease-recovery-1",
-        delaySeconds: 2,
-      },
-    ]);
+    assert.equal(enqueueCalls.length, 1);
+    assert.equal(enqueueCalls[0]?.claimId, claimId);
+    assert.equal(enqueueCalls[0]?.organizationId, organizationId);
+    assert.equal(enqueueCalls[0]?.inboundMessageId, inboundMessageId);
+    assert.equal(enqueueCalls[0]?.providerMessageId, providerMessageId);
+    assert.equal(enqueueCalls[0]?.processingAttempt, 1);
+    assert.equal(enqueueCalls[0]?.processingLeaseToken, "lease-recovery-1");
+    assert.equal(enqueueCalls[0]?.delaySeconds, 2);
+    assert.equal(enqueueCalls[0]?.messageId, "queue-recovery-1");
+    assert.equal(enqueueCalls[0]?.queueUrl, "https://example.invalid/claims");
+    assert.ok(enqueueCalls[0]?.enqueuedAt instanceof Date);
 
     const claim = await prisma.claim.findUniqueOrThrow({
       where: {
@@ -94,7 +96,7 @@ test("recoverStaleProcessingClaim re-enqueues stale processing claims and record
       fromStatus: "PROCESSING",
       toStatus: "PROCESSING",
       source: "manual_processing_recovery",
-      queueMessageId: "processing-recovery-message-1",
+      queueMessageId: "queue-recovery-1",
       inboundMessageId,
       providerMessageId,
       staleMinutes: 30,
@@ -185,6 +187,7 @@ test("recoverStaleProcessingClaim leaves stale claims untouched when the queue i
         prismaClient: prisma,
         nowFn: () => now,
         staleMinutes: 30,
+        resolveQueueUrlFn: () => null,
         enqueueClaimIngestJobFn: async () => ({
           enqueued: false,
           reason: "queue_not_configured",
