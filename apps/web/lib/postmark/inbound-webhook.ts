@@ -38,6 +38,7 @@ type PostmarkInboundRouteDependencies = {
   prismaClient?: typeof prisma;
   maybeEnqueueClaimForProcessingFn?: typeof maybeEnqueueClaimForProcessing;
   putAttachmentObjectFn?: typeof putAttachmentObject;
+  revalidateDashboardSummaryCacheFn?: (organizationId: string) => void;
   captureWebExceptionFn?: typeof captureWebException;
   logErrorFn?: typeof logError;
 };
@@ -49,6 +50,8 @@ export function createPostmarkInboundHandler(
   const maybeEnqueueClaimForProcessingFn =
     dependencies.maybeEnqueueClaimForProcessingFn ?? maybeEnqueueClaimForProcessing;
   const putAttachmentObjectFn = dependencies.putAttachmentObjectFn ?? putAttachmentObject;
+  const revalidateDashboardSummaryCacheFn =
+    dependencies.revalidateDashboardSummaryCacheFn ?? (() => {});
   const captureWebExceptionFn = dependencies.captureWebExceptionFn ?? captureWebException;
   const logErrorFn = dependencies.logErrorFn ?? logError;
 
@@ -151,6 +154,7 @@ export function createPostmarkInboundHandler(
       });
 
       if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
+        revalidateDashboardSummaryCacheFn(organization.id);
         return respondToEnqueueFailure(
           {
             event: "webhook_enqueue_claim_failed",
@@ -165,6 +169,7 @@ export function createPostmarkInboundHandler(
         );
       }
 
+      revalidateDashboardSummaryCacheFn(organization.id);
       return Response.json({
         ok: true,
         deduplicated: false,
@@ -198,6 +203,7 @@ export function createPostmarkInboundHandler(
             },
             {
               maybeEnqueueClaimForProcessingFn,
+              revalidateDashboardSummaryCacheFn,
               logErrorFn,
             },
           );
@@ -320,6 +326,7 @@ async function respondForExistingInboundMessage(input: {
   existingMessage: ExistingInboundMessageRecord;
 }, dependencies: {
   maybeEnqueueClaimForProcessingFn: typeof maybeEnqueueClaimForProcessing;
+  revalidateDashboardSummaryCacheFn: (organizationId: string) => void;
   logErrorFn: typeof logError;
 }): Promise<Response> {
   const { organizationId, providerMessageId, existingMessage } = input;
@@ -332,6 +339,7 @@ async function respondForExistingInboundMessage(input: {
   });
 
   if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
+    dependencies.revalidateDashboardSummaryCacheFn(organizationId);
     return respondToEnqueueFailure(
       {
         event: "webhook_enqueue_deduplicated_failed",
@@ -344,6 +352,10 @@ async function respondForExistingInboundMessage(input: {
       },
       dependencies.logErrorFn,
     );
+  }
+
+  if (queueResult?.enqueued) {
+    dependencies.revalidateDashboardSummaryCacheFn(organizationId);
   }
 
   return Response.json({

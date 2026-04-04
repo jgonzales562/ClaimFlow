@@ -1,9 +1,16 @@
 import type { ClaimIngestJobConfig } from "./ingest-job.js";
+import {
+  DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_DISPATCH_CONCURRENCY,
+  DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_MAX_BATCHES_PER_RUN,
+} from "@claimflow/db";
 
 export type WorkerConfig = ClaimIngestJobConfig & {
   awsRegion: string;
   queueUrl: string;
   dlqUrl: string | null;
+  ingestQueueOutboxDispatchBatchSize: number;
+  ingestQueueOutboxDispatchConcurrency: number;
+  ingestQueueOutboxDispatchMaxBatchesPerRun: number;
   ingestQueueOutboxCleanupBatchSize: number;
   ingestQueueOutboxCleanupIntervalMs: number;
   ingestQueueOutboxRetentionHours: number;
@@ -38,6 +45,24 @@ export function loadWorkerConfig(): WorkerConfig {
     awsRegion,
     queueUrl,
     dlqUrl: optionalEnv("CLAIMS_INGEST_DLQ_URL"),
+    ingestQueueOutboxDispatchBatchSize: parseIntegerEnv(
+      "CLAIMS_INGEST_OUTBOX_DISPATCH_BATCH_SIZE",
+      25,
+      1,
+      1_000,
+    ),
+    ingestQueueOutboxDispatchConcurrency: parseIntegerEnv(
+      "CLAIMS_INGEST_OUTBOX_DISPATCH_CONCURRENCY",
+      DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_DISPATCH_CONCURRENCY,
+      1,
+      100,
+    ),
+    ingestQueueOutboxDispatchMaxBatchesPerRun: parseIntegerEnv(
+      "CLAIMS_INGEST_OUTBOX_DISPATCH_MAX_BATCHES_PER_RUN",
+      DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_MAX_BATCHES_PER_RUN,
+      1,
+      100,
+    ),
     ingestQueueOutboxCleanupBatchSize: parseIntegerEnv(
       "CLAIMS_INGEST_OUTBOX_CLEANUP_BATCH_SIZE",
       500,

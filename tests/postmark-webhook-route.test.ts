@@ -37,6 +37,7 @@ test("postmark webhook returns deduplicated response for existing inbound messag
   const mailboxHash = `mailbox-${suffix}`;
   const providerMessageId = `message-${suffix}`;
   const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+  const revalidatedOrganizations: string[] = [];
 
   await withEnv(
     {
@@ -58,6 +59,13 @@ test("postmark webhook returns deduplicated response for existing inbound messag
         },
         select: {
           id: true,
+        },
+      });
+
+      const handler = createPostmarkInboundHandler({
+        prismaClient: prisma,
+        revalidateDashboardSummaryCacheFn: (organizationId) => {
+          revalidatedOrganizations.push(organizationId);
         },
       });
 
@@ -93,7 +101,7 @@ test("postmark webhook returns deduplicated response for existing inbound messag
           },
         });
 
-        const response = await POST(
+        const response = await handler(
           new Request("http://localhost/api/webhooks/postmark/inbound", {
             method: "POST",
             body: JSON.stringify({
@@ -133,6 +141,7 @@ test("postmark webhook returns deduplicated response for existing inbound messag
         });
 
         assert.equal(messages.length, 1);
+        assert.deepEqual(revalidatedOrganizations, []);
       } finally {
         await prisma.organization.delete({
           where: {
@@ -155,6 +164,7 @@ test("postmark webhook persists stored attachments and returns attachment counts
     metadata: Record<string, string> | undefined;
     body: string;
   }> = [];
+  const revalidatedOrganizations: string[] = [];
 
   await withEnv(
     {
@@ -168,6 +178,9 @@ test("postmark webhook persists stored attachments and returns attachment counts
           enqueued: false,
           reason: "queue_not_configured",
         }),
+        revalidateDashboardSummaryCacheFn: (organizationId) => {
+          revalidatedOrganizations.push(organizationId);
+        },
         putAttachmentObjectFn: async (input) => {
           storedObjects.push({
             key: input.key,
@@ -250,6 +263,7 @@ test("postmark webhook persists stored attachments and returns attachment counts
         assert.equal(typeof storedObjects[0]?.metadata?.claim_id, "string");
         assert.equal(typeof storedObjects[0]?.metadata?.inbound_message_id, "string");
         assert.match(storedObjects[0]?.key ?? "", /^orgs\/.+\/claims\/.+\/messages\/.+\/.+-receipt\.pdf$/);
+        assert.deepEqual(revalidatedOrganizations, [organization.id]);
 
         const attachments = await prisma.claimAttachment.findMany({
           where: {
@@ -408,6 +422,7 @@ test("postmark webhook returns 500 when enqueueing fails after persistence", asy
   const mailboxHash = `mailbox-${suffix}`;
   const providerMessageId = `message-${suffix}`;
   const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+  const revalidatedOrganizations: string[] = [];
 
   await withEnv(
     {
@@ -423,6 +438,9 @@ test("postmark webhook returns 500 when enqueueing fails after persistence", asy
           queueUrl: "https://example.invalid/claims",
           error: "simulated queue failure",
         }),
+        revalidateDashboardSummaryCacheFn: (organizationId) => {
+          revalidatedOrganizations.push(organizationId);
+        },
       });
 
       const organization = await prisma.organization.create({
@@ -499,6 +517,7 @@ test("postmark webhook returns 500 when enqueueing fails after persistence", asy
         assert.equal(claims.length, 1);
         assert.equal(claims[0]?.status, "NEW");
         assert.equal(claims[0]?.events.length, 0);
+        assert.deepEqual(revalidatedOrganizations, [organization.id]);
       } finally {
         await prisma.organization.delete({
           where: {

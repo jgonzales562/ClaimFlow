@@ -3,7 +3,6 @@ import { loadWorkerConfig, type WorkerConfig } from "./config.js";
 import { processClaimIngestJob } from "./ingest-job.js";
 import {
   cleanupDispatchedClaimIngestQueueOutbox,
-  DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_BATCH_SIZE,
   dispatchPendingClaimIngestQueueOutbox,
 } from "@claimflow/db";
 import {
@@ -15,11 +14,7 @@ import {
 } from "./observability.js";
 import { recoverStaleProcessingClaims } from "./processing-watchdog.js";
 import { handleClaimQueueMessage } from "./queue-handler.js";
-import {
-  ReceiveMessageCommand,
-  SendMessageCommand,
-  SQSClient,
-} from "@aws-sdk/client-sqs";
+import { ReceiveMessageCommand, SendMessageCommand, SQSClient } from "@aws-sdk/client-sqs";
 import type { Message } from "@aws-sdk/client-sqs";
 import * as Sentry from "@sentry/node";
 import { PrismaClient } from "@prisma/client";
@@ -83,6 +78,9 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
   logInfo("worker_started", {
     queueUrl: config.queueUrl,
     dlqUrl: config.dlqUrl,
+    ingestQueueOutboxDispatchBatchSize: config.ingestQueueOutboxDispatchBatchSize,
+    ingestQueueOutboxDispatchConcurrency: config.ingestQueueOutboxDispatchConcurrency,
+    ingestQueueOutboxDispatchMaxBatchesPerRun: config.ingestQueueOutboxDispatchMaxBatchesPerRun,
     ingestQueueOutboxCleanupBatchSize: config.ingestQueueOutboxCleanupBatchSize,
     ingestQueueOutboxCleanupIntervalMs: config.ingestQueueOutboxCleanupIntervalMs,
     ingestQueueOutboxRetentionHours: config.ingestQueueOutboxRetentionHours,
@@ -157,7 +155,9 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
     try {
       const dispatchResult = await dispatchPendingClaimIngestQueueOutbox({
         prismaClient: prisma,
-        batchSize: DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_BATCH_SIZE,
+        batchSize: config.ingestQueueOutboxDispatchBatchSize,
+        concurrency: config.ingestQueueOutboxDispatchConcurrency,
+        maxBatches: config.ingestQueueOutboxDispatchMaxBatchesPerRun,
         sendMessageFn: async (dispatchInput) => {
           try {
             const response = await sqsClient.send(

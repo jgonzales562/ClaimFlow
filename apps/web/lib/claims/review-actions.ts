@@ -20,6 +20,7 @@ type DashboardClaimActionDependencies = {
   hasMinimumRoleFn: (currentRole: MembershipRole, requiredRole: MembershipRole) => boolean;
   redirectFn: (location: string) => never;
   revalidatePathFn: (path: string) => void;
+  revalidateDashboardSummaryCacheFn?: (organizationId: string) => void;
   updateClaimReviewFn?: typeof updateClaimReview;
   transitionDashboardClaimStatusFn?: typeof transitionDashboardClaimStatus;
   retryErroredClaimFn?: typeof retryErroredClaimService;
@@ -93,6 +94,7 @@ export function createDashboardClaimActionHandlers(
       dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=no_changes`);
     }
 
+    dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
     dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=claim_updated`);
@@ -126,6 +128,7 @@ export function createDashboardClaimActionHandlers(
       dependencies.redirectFn(`/dashboard/claims/${result.claimId}?error=invalid_status_transition`);
     }
 
+    dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
     dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=status_updated`);
@@ -164,6 +167,7 @@ export function createDashboardClaimActionHandlers(
       dependencies.redirectFn(appendRedirectState(returnTo, "error", "claim_retry_failed"));
     }
 
+    dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn("/dashboard/errors");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
@@ -209,6 +213,7 @@ export function createDashboardClaimActionHandlers(
       );
     }
 
+    dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
     dependencies.redirectFn(

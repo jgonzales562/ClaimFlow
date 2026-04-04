@@ -32,8 +32,23 @@ test("claims export rejects invalid formats", async () => {
   });
 });
 
-test("claims export returns JSON attachments with clamped limits and serialized filters", async () => {
-  const calls: Array<{ where: unknown; limit: number }> = [];
+test("claims export streams JSON attachments with clamped limits and serialized filters", async () => {
+  const fetchCalls: Array<{ where: unknown; cursor: unknown; take: number }> = [];
+  const streamCalls: Array<{
+    where: unknown;
+    limit: number;
+    metadata: {
+      exportedAt: string;
+      format: "json";
+      filters: {
+        status: string | null;
+        search: string | null;
+        createdFrom: string | null;
+        createdTo: string | null;
+      };
+    };
+    initialBatch: unknown[];
+  }> = [];
   const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
   const claims = [
     {
@@ -55,10 +70,34 @@ test("claims export returns JSON attachments with clamped limits and serialized 
   ];
   const handler = createClaimsExportHandler({
     getAuthContextFn: async () => AUTH,
-    listClaimsForExportFn: async (input) => {
-      calls.push(input);
+    fetchClaimExportBatchFn: async (input) => {
+      fetchCalls.push(input);
       return claims;
     },
+    buildJsonStreamFn: (input) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          streamCalls.push({
+            where: input.where,
+            limit: input.limit,
+            metadata: input.metadata,
+            initialBatch: input.initialBatch,
+          });
+          input.onComplete?.(input.initialBatch.length);
+          controller.enqueue(
+            new TextEncoder().encode(
+              JSON.stringify({
+                exportedAt: input.metadata.exportedAt,
+                format: input.metadata.format,
+                filters: input.metadata.filters,
+                claims: input.initialBatch,
+                count: input.initialBatch.length,
+              }),
+            ),
+          );
+          controller.close();
+        },
+      }),
     buildTimestampTokenFn: () => "2026-03-05T12-00-00-000Z",
     logInfoFn: (event, context) => {
       loggedInfo.push({ event, context });
@@ -105,10 +144,74 @@ test("claims export returns JSON attachments with clamped limits and serialized 
       updatedAt: "2026-03-02T11:00:00.000Z",
     },
   ]);
-  assert.equal(calls.length, 1);
-  assert.equal(calls[0]?.limit, 5000);
+  assert.equal(fetchCalls.length, 1);
+  assert.equal(fetchCalls[0]?.take, 250);
+  assert.equal(streamCalls.length, 1);
+  assert.equal(streamCalls[0]?.limit, 5000);
+  assert.deepEqual(streamCalls[0]?.metadata.filters, {
+    status: "READY",
+    search: "blender",
+    createdFrom: "2026-02-01",
+    createdTo: "2026-02-28",
+  });
   assert.equal(loggedInfo.length, 1);
   assert.equal(loggedInfo[0]?.event, "claims_export_completed");
+});
+
+test("claims export streams JSON results across batches without materializing the full export", async () => {
+  const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
+  const fetchCalls: Array<{ cursor: unknown; take: number }> = [];
+  const streamedClaims = Array.from({ length: 251 }, (_, index) => buildClaimRecord(index + 1));
+  const handler = createClaimsExportHandler({
+    getAuthContextFn: async () => AUTH,
+    fetchClaimExportBatchFn: async (input) => {
+      fetchCalls.push({
+        cursor: input.cursor,
+        take: input.take,
+      });
+
+      if (fetchCalls.length === 1) {
+        return streamedClaims.slice(0, 250);
+      }
+
+      if (fetchCalls.length === 2) {
+        return streamedClaims.slice(250);
+      }
+
+      return [];
+    },
+    buildTimestampTokenFn: () => "2026-03-05T12-00-00-000Z",
+    logInfoFn: (event, context) => {
+      loggedInfo.push({ event, context });
+    },
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/claims/export?format=json&limit=251"),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "application/json; charset=utf-8");
+
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.equal(body.format, "json");
+  assert.equal(body.count, 251);
+  assert.deepEqual(body.filters, {
+    status: null,
+    search: null,
+    createdFrom: null,
+    createdTo: null,
+  });
+  assert.equal(Array.isArray(body.claims), true);
+  assert.equal((body.claims as unknown[]).length, 251);
+  assert.equal((body.claims as Array<Record<string, unknown>>)[0]?.id, "claim-1");
+  assert.equal((body.claims as Array<Record<string, unknown>>)[250]?.id, "claim-251");
+  assert.equal(fetchCalls.length, 2);
+  assert.equal(fetchCalls[0]?.take, 250);
+  assert.equal(fetchCalls[1]?.take, 1);
+  assert.deepEqual(loggedInfo.map((entry) => entry.event), ["claims_export_completed"]);
+  assert.equal(loggedInfo[0]?.context.count, 251);
+  assert.equal(loggedInfo[0]?.context.countPrecomputed, false);
 });
 
 test("claims export defaults to CSV and streams the response body", async () => {
@@ -145,7 +248,7 @@ test("claims export returns 500 when export generation fails", async () => {
   const loggedErrors: Array<{ event: string; context: Record<string, unknown> }> = [];
   const handler = createClaimsExportHandler({
     getAuthContextFn: async () => AUTH,
-    listClaimsForExportFn: async () => {
+    fetchClaimExportBatchFn: async () => {
       throw new Error("simulated export failure");
     },
     captureWebExceptionFn: (error, context) => {
@@ -165,3 +268,23 @@ test("claims export returns 500 when export generation fails", async () => {
   assert.equal(loggedErrors[0]?.event, "claims_export_failed");
   assert.equal(loggedErrors[0]?.context.error, "simulated export failure");
 });
+
+function buildClaimRecord(index: number) {
+  const id = `claim-${index}`;
+  return {
+    id,
+    externalClaimId: `ext-${index}`,
+    sourceEmail: `customer-${index}@example.com`,
+    customerName: `Customer ${index}`,
+    productName: `Product ${index}`,
+    serialNumber: `SN-${index}`,
+    purchaseDate: new Date("2026-02-14T00:00:00.000Z"),
+    issueSummary: `Issue ${index}`,
+    retailer: "Target",
+    status: "READY",
+    warrantyStatus: "LIKELY_IN_WARRANTY",
+    missingInfo: [],
+    createdAt: new Date(`2026-03-${String(((index - 1) % 28) + 1).padStart(2, "0")}T10:00:00.000Z`),
+    updatedAt: new Date(`2026-03-${String(((index - 1) % 28) + 1).padStart(2, "0")}T11:00:00.000Z`),
+  } as const;
+}

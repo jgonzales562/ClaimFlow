@@ -12,6 +12,7 @@ import { extractErrorMessage, logError, logInfo } from "@/lib/observability/log"
 
 const CLAIM_EXPORT_BATCH_SIZE = 250;
 const CSV_STREAM_CHUNK_ROWS = 64;
+const JSON_STREAM_CHUNK_ROWS = 32;
 
 const claimExportSelect = {
   id: true,
@@ -43,7 +44,8 @@ type ExportCursor = {
 
 type ClaimsExportDependencies = {
   getAuthContextFn?: typeof getAuthContext;
-  listClaimsForExportFn?: typeof listClaimsForExport;
+  fetchClaimExportBatchFn?: typeof fetchClaimExportBatch;
+  buildJsonStreamFn?: typeof buildJsonStream;
   buildCsvStreamFn?: typeof buildCsvStream;
   captureWebExceptionFn?: typeof captureWebException;
   logInfoFn?: typeof logInfo;
@@ -53,7 +55,8 @@ type ClaimsExportDependencies = {
 
 export function createClaimsExportHandler(dependencies: ClaimsExportDependencies = {}) {
   const getAuthContextFn = dependencies.getAuthContextFn ?? getAuthContext;
-  const listClaimsForExportFn = dependencies.listClaimsForExportFn ?? listClaimsForExport;
+  const fetchClaimExportBatchFn = dependencies.fetchClaimExportBatchFn ?? fetchClaimExportBatch;
+  const buildJsonStreamFn = dependencies.buildJsonStreamFn ?? buildJsonStream;
   const buildCsvStreamFn = dependencies.buildCsvStreamFn ?? buildCsvStream;
   const captureWebExceptionFn = dependencies.captureWebExceptionFn ?? captureWebException;
   const logInfoFn = dependencies.logInfoFn ?? logInfo;
@@ -87,39 +90,71 @@ export function createClaimsExportHandler(dependencies: ClaimsExportDependencies
       const where = buildClaimWhereInput(auth.organizationId, filters);
 
       if (format === "json") {
-        const claims = await listClaimsForExportFn({ where, limit });
-        logInfoFn("claims_export_completed", {
-          organizationId: auth.organizationId,
-          userId: auth.userId,
-          format,
-          count: claims.length,
-          limit,
-          status: filters.status,
-          hasSearch: Boolean(filters.search),
-          createdFrom: filters.createdFrom?.toISOString() ?? null,
-          createdTo: filters.createdTo?.toISOString() ?? null,
+        const initialBatch = await fetchClaimExportBatchFn({
+          where,
+          cursor: null,
+          take: Math.min(CLAIM_EXPORT_BATCH_SIZE, limit),
         });
+        const exportedAt = new Date().toISOString();
+        const initialCursor =
+          initialBatch.length > 0 ? getNextExportCursor(initialBatch[initialBatch.length - 1]) : null;
 
-        const payload = {
-          exportedAt: new Date().toISOString(),
-          format,
-          count: claims.length,
-          filters: {
-            status: filters.status,
-            search: filters.search,
-            createdFrom: formatDateInput(filters.createdFrom) || null,
-            createdTo: formatDateInput(filters.createdTo) || null,
-          },
-          claims,
-        };
+        return new Response(
+          buildJsonStreamFn({
+            where,
+            limit,
+            initialBatch,
+            cursor: initialCursor,
+            metadata: {
+              exportedAt,
+              format,
+              filters: {
+                status: filters.status,
+                search: filters.search,
+                createdFrom: formatDateInput(filters.createdFrom) || null,
+                createdTo: formatDateInput(filters.createdTo) || null,
+              },
+            },
+            fetchClaimExportBatchFn,
+            onComplete: (count) => {
+              logInfoFn("claims_export_completed", {
+                organizationId: auth.organizationId,
+                userId: auth.userId,
+                format,
+                count,
+                limit,
+                status: filters.status,
+                hasSearch: Boolean(filters.search),
+                createdFrom: filters.createdFrom?.toISOString() ?? null,
+                createdTo: filters.createdTo?.toISOString() ?? null,
+                countPrecomputed: false,
+              });
+            },
+            onError: (error) => {
+              captureWebExceptionFn(error, {
+                route: "/api/claims/export",
+                organizationId: auth.organizationId,
+                userId: auth.userId,
+                format,
+                stage: "json_stream",
+              });
 
-        return new Response(JSON.stringify(payload, null, 2), {
+              logErrorFn("claims_export_stream_failed", {
+                organizationId: auth.organizationId,
+                userId: auth.userId,
+                format,
+                error: extractErrorMessage(error),
+              });
+            },
+          }),
+          {
           status: 200,
           headers: {
             "content-type": "application/json; charset=utf-8",
             "content-disposition": `attachment; filename="claims-export-${buildTimestampTokenFn()}.json"`,
           },
-        });
+          },
+        );
       }
 
       logInfoFn("claims_export_completed", {
@@ -235,6 +270,97 @@ function buildCsvStream(input: {
   });
 }
 
+function buildJsonStream(input: {
+  where: Prisma.ClaimWhereInput;
+  limit: number;
+  initialBatch: ExportClaimRecord[];
+  cursor: ExportCursor | null;
+  metadata: {
+    exportedAt: string;
+    format: "json";
+    filters: {
+      status: string | null;
+      search: string | null;
+      createdFrom: string | null;
+      createdTo: string | null;
+    };
+  };
+  fetchClaimExportBatchFn: typeof fetchClaimExportBatch;
+  onComplete?: (count: number) => void;
+  onError?: (error: unknown) => void;
+}): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  const prefix = `{"exportedAt":${JSON.stringify(input.metadata.exportedAt)},"format":"json","filters":${JSON.stringify(input.metadata.filters)},"claims":[`;
+
+  let started = false;
+  let completed = false;
+  let count = 0;
+  let remaining = input.limit;
+  let cursor = input.cursor;
+  let batch = input.initialBatch;
+  let batchIndex = 0;
+  let emittedAnyClaim = false;
+  let moreAvailable = input.initialBatch.length === Math.min(CLAIM_EXPORT_BATCH_SIZE, input.limit);
+
+  const finalize = (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    if (completed) {
+      return;
+    }
+
+    controller.enqueue(encoder.encode(`],"count":${count}}`));
+    completed = true;
+    input.onComplete?.(count);
+    controller.close();
+  };
+
+  return new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        if (!started) {
+          controller.enqueue(encoder.encode(prefix));
+          started = true;
+          if (batch.length === 0 && remaining <= 0) {
+            finalize(controller);
+          }
+          return;
+        }
+
+        if (batchIndex >= batch.length && remaining > 0 && moreAvailable) {
+          const take = Math.min(CLAIM_EXPORT_BATCH_SIZE, remaining);
+          batch = await input.fetchClaimExportBatchFn({
+            where: input.where,
+            cursor,
+            take,
+          });
+          batchIndex = 0;
+          moreAvailable = batch.length === take;
+          if (batch.length > 0) {
+            cursor = getNextExportCursor(batch[batch.length - 1]);
+          }
+        }
+
+        if (batchIndex >= batch.length) {
+          finalize(controller);
+          return;
+        }
+
+        const chunkSize = Math.min(JSON_STREAM_CHUNK_ROWS, batch.length - batchIndex, remaining);
+        const chunk = batch.slice(batchIndex, batchIndex + chunkSize);
+        const serialized = chunk.map((claim) => JSON.stringify(claim)).join(",");
+        controller.enqueue(encoder.encode(`${emittedAnyClaim ? "," : ""}${serialized}`));
+        emittedAnyClaim = true;
+        batchIndex += chunkSize;
+        count += chunkSize;
+        remaining -= chunkSize;
+      } catch (error: unknown) {
+        completed = true;
+        input.onError?.(error);
+        controller.error(error);
+      }
+    },
+  });
+}
+
 function claimToCsvRow(claim: ExportClaimRecord): string {
   return [
     claim.id,
@@ -254,33 +380,6 @@ function claimToCsvRow(claim: ExportClaimRecord): string {
   ]
     .map(csvEscape)
     .join(",");
-}
-
-async function listClaimsForExport(input: {
-  where: Prisma.ClaimWhereInput;
-  limit: number;
-}): Promise<ExportClaimRecord[]> {
-  let cursor: ExportCursor | null = null;
-  let remaining = input.limit;
-  const claims: ExportClaimRecord[] = [];
-
-  while (remaining > 0) {
-    const batch = await fetchClaimExportBatch({
-      where: input.where,
-      cursor,
-      take: Math.min(CLAIM_EXPORT_BATCH_SIZE, remaining),
-    });
-
-    if (batch.length === 0) {
-      break;
-    }
-
-    claims.push(...batch);
-    remaining -= batch.length;
-    cursor = getNextExportCursor(batch[batch.length - 1]);
-  }
-
-  return claims;
 }
 
 async function fetchClaimExportBatch(input: {

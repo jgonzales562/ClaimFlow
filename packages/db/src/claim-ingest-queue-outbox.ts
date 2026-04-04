@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 
 const claimIngestQueueOutboxDispatchSelect = {
   id: true,
@@ -17,10 +17,12 @@ type ClaimIngestQueueOutboxDispatchRecord = Prisma.ClaimIngestQueueOutboxGetPayl
   select: typeof claimIngestQueueOutboxDispatchSelect;
 }>;
 
-type ClaimIngestQueueOutboxClient = Pick<PrismaClient, "claimIngestQueueOutbox">;
+type ClaimIngestQueueOutboxClient = Pick<PrismaClient, "$queryRaw" | "claimIngestQueueOutbox">;
 
 export const CLAIM_INGEST_QUEUE_OUTBOX_DISPATCH_LEASE_TIMEOUT_MS = 60_000;
 export const DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_BATCH_SIZE = 25;
+export const DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_DISPATCH_CONCURRENCY = 5;
+export const DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_MAX_BATCHES_PER_RUN = 4;
 export const DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_CLEANUP_BATCH_SIZE = 500;
 
 export type ClaimIngestQueueMessageV3 = {
@@ -116,7 +118,9 @@ export function buildClaimIngestQueueMessage(input: {
   };
 }
 
-export function normalizeClaimIngestQueueDelaySeconds(value: number | undefined): number | undefined {
+export function normalizeClaimIngestQueueDelaySeconds(
+  value: number | undefined,
+): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return undefined;
   }
@@ -162,49 +166,62 @@ export async function loadClaimIngestQueueOutboxSummary(input: {
   now?: Date;
 }): Promise<ClaimIngestQueueOutboxSummary> {
   const now = input.now ?? new Date();
-  const pendingWhere: Prisma.ClaimIngestQueueOutboxWhereInput = {
-    dispatchedAt: null,
-    ...(input.organizationId ? { organizationId: input.organizationId } : {}),
+  const nowSqlTimestamp = formatSqlTimestamp(now);
+  const summaryRows = await input.prismaClient.$queryRaw<
+    Array<{
+      pendingCount: number;
+      dueCount: number;
+      oldestPendingCreatedAt: Date | null;
+      oldestDueAvailableAt: Date | null;
+    }>
+  >(Prisma.sql`
+    SELECT
+      SUM(
+        CASE
+          WHEN "dispatchedAt" IS NULL THEN 1
+          ELSE 0
+        END
+      )::int AS "pendingCount",
+      SUM(
+        CASE
+          WHEN "dispatchedAt" IS NULL AND "availableAt" <= ${nowSqlTimestamp}::timestamp THEN 1
+          ELSE 0
+        END
+      )::int AS "dueCount",
+      MIN(
+        CASE
+          WHEN "dispatchedAt" IS NULL THEN "createdAt"
+          ELSE NULL
+        END
+      ) AS "oldestPendingCreatedAt",
+      MIN(
+        CASE
+          WHEN "dispatchedAt" IS NULL
+            AND "availableAt" <= ${nowSqlTimestamp}::timestamp THEN "availableAt"
+          ELSE NULL
+        END
+      ) AS "oldestDueAvailableAt"
+    FROM "ClaimIngestQueueOutbox"
+    ${input.organizationId ? Prisma.sql`WHERE "organizationId" = ${input.organizationId}` : Prisma.empty}
+  `);
+  const summary = summaryRows[0] ?? {
+    pendingCount: 0,
+    dueCount: 0,
+    oldestPendingCreatedAt: null,
+    oldestDueAvailableAt: null,
   };
-  const dueWhere: Prisma.ClaimIngestQueueOutboxWhereInput = {
-    ...pendingWhere,
-    availableAt: {
-      lte: now,
-    },
-  };
-
-  const [pendingCount, dueCount, oldestPending, oldestDue] = await Promise.all([
-    input.prismaClient.claimIngestQueueOutbox.count({
-      where: pendingWhere,
-    }),
-    input.prismaClient.claimIngestQueueOutbox.count({
-      where: dueWhere,
-    }),
-    input.prismaClient.claimIngestQueueOutbox.findFirst({
-      where: pendingWhere,
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-      select: {
-        createdAt: true,
-      },
-    }),
-    input.prismaClient.claimIngestQueueOutbox.findFirst({
-      where: dueWhere,
-      orderBy: [{ availableAt: "asc" }, { id: "asc" }],
-      select: {
-        availableAt: true,
-      },
-    }),
-  ]);
 
   return {
-    pendingCount,
-    dueCount,
-    oldestPendingAgeMinutes: oldestPending
-      ? getAgeMinutes(now, oldestPending.createdAt)
+    pendingCount: summary.pendingCount,
+    dueCount: summary.dueCount,
+    oldestPendingAgeMinutes: summary.oldestPendingCreatedAt
+      ? getAgeMinutes(now, summary.oldestPendingCreatedAt)
       : null,
-    oldestPendingCreatedAt: oldestPending?.createdAt ?? null,
-    oldestDueAgeMinutes: oldestDue ? getAgeMinutes(now, oldestDue.availableAt) : null,
-    oldestDueAvailableAt: oldestDue?.availableAt ?? null,
+    oldestPendingCreatedAt: summary.oldestPendingCreatedAt,
+    oldestDueAgeMinutes: summary.oldestDueAvailableAt
+      ? getAgeMinutes(now, summary.oldestDueAvailableAt)
+      : null,
+    oldestDueAvailableAt: summary.oldestDueAvailableAt,
   };
 }
 
@@ -337,11 +354,14 @@ export async function dispatchPendingClaimIngestQueueOutbox(
     prismaClient: ClaimIngestQueueOutboxClient;
     sendMessageFn: (input: ClaimIngestQueueSendInput) => Promise<ClaimIngestQueueSendResult>;
     batchSize?: number;
+    concurrency?: number;
+    maxBatches?: number;
   },
   dependencies: {
     nowFn?: () => Date;
     createDispatchLeaseTokenFn?: () => string;
     dispatchLeaseTimeoutMs?: number;
+    dispatchByIdFn?: typeof dispatchClaimIngestQueueOutboxById;
   } = {},
 ): Promise<DispatchPendingClaimIngestQueueOutboxResult> {
   const now = (dependencies.nowFn ?? (() => new Date()))();
@@ -349,59 +369,75 @@ export async function dispatchPendingClaimIngestQueueOutbox(
     dependencies.dispatchLeaseTimeoutMs ?? CLAIM_INGEST_QUEUE_OUTBOX_DISPATCH_LEASE_TIMEOUT_MS;
   const dispatchLeaseStaleBefore = new Date(now.getTime() - dispatchLeaseTimeoutMs);
   const batchSize = input.batchSize ?? DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_BATCH_SIZE;
-  const pendingEntries = await input.prismaClient.claimIngestQueueOutbox.findMany({
-    where: {
-      dispatchedAt: null,
-      OR: [
-        {
-          dispatchLeaseClaimedAt: null,
-        },
-        {
-          dispatchLeaseClaimedAt: {
-            lte: dispatchLeaseStaleBefore,
-          },
-        },
-      ],
-    },
-    orderBy: [{ availableAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
-    take: batchSize,
-    select: {
-      id: true,
-    },
-  });
+  const concurrency = normalizeDispatchConcurrency(input.concurrency);
+  const maxBatches = normalizeDispatchMaxBatches(input.maxBatches);
+  const dispatchByIdFn = dependencies.dispatchByIdFn ?? dispatchClaimIngestQueueOutboxById;
 
   const result: DispatchPendingClaimIngestQueueOutboxResult = {
-    selectedCount: pendingEntries.length,
+    selectedCount: 0,
     dispatchedCount: 0,
     skippedCount: 0,
     failedCount: 0,
   };
 
-  for (const pendingEntry of pendingEntries) {
-    const dispatchResult = await dispatchClaimIngestQueueOutboxById(
-      {
-        prismaClient: input.prismaClient,
-        outboxId: pendingEntry.id,
-        sendMessageFn: input.sendMessageFn,
+  for (let batchIndex = 0; batchIndex < maxBatches; batchIndex += 1) {
+    const pendingEntries = await input.prismaClient.claimIngestQueueOutbox.findMany({
+      where: {
+        dispatchedAt: null,
+        OR: [
+          {
+            dispatchLeaseClaimedAt: null,
+          },
+          {
+            dispatchLeaseClaimedAt: {
+              lte: dispatchLeaseStaleBefore,
+            },
+          },
+        ],
       },
-      {
-        nowFn: () => now,
-        createDispatchLeaseTokenFn: dependencies.createDispatchLeaseTokenFn,
-        dispatchLeaseTimeoutMs,
+      orderBy: [{ availableAt: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+      take: batchSize,
+      select: {
+        id: true,
       },
-    );
+    });
 
-    if (dispatchResult.kind === "dispatched") {
-      result.dispatchedCount += 1;
-      continue;
+    result.selectedCount += pendingEntries.length;
+
+    if (pendingEntries.length === 0) {
+      break;
     }
 
-    if (dispatchResult.kind === "send_failed") {
-      result.failedCount += 1;
-      continue;
-    }
+    await runWithConcurrency(pendingEntries, concurrency, async (pendingEntry) => {
+      const dispatchResult = await dispatchByIdFn(
+        {
+          prismaClient: input.prismaClient,
+          outboxId: pendingEntry.id,
+          sendMessageFn: input.sendMessageFn,
+        },
+        {
+          nowFn: () => now,
+          createDispatchLeaseTokenFn: dependencies.createDispatchLeaseTokenFn,
+          dispatchLeaseTimeoutMs,
+        },
+      );
 
-    result.skippedCount += 1;
+      if (dispatchResult.kind === "dispatched") {
+        result.dispatchedCount += 1;
+        return;
+      }
+
+      if (dispatchResult.kind === "send_failed") {
+        result.failedCount += 1;
+        return;
+      }
+
+      result.skippedCount += 1;
+    });
+
+    if (pendingEntries.length < batchSize) {
+      break;
+    }
   }
 
   return result;
@@ -514,6 +550,50 @@ function getRemainingDelaySeconds(now: Date, availableAt: Date): number | undefi
 
 function defaultCreateLeaseToken(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function normalizeDispatchConcurrency(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 1;
+  }
+
+  return Math.max(1, Math.floor(value));
+}
+
+function normalizeDispatchMaxBatches(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return DEFAULT_CLAIM_INGEST_QUEUE_OUTBOX_MAX_BATCHES_PER_RUN;
+  }
+
+  return Math.max(1, Math.floor(value));
+}
+
+async function runWithConcurrency<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0;
+  const workerCount = Math.min(concurrency, items.length);
+
+  await Promise.all(
+    Array.from({ length: workerCount }, async () => {
+      while (true) {
+        const currentIndex = nextIndex;
+        nextIndex += 1;
+
+        if (currentIndex >= items.length) {
+          return;
+        }
+
+        await worker(items[currentIndex] as T);
+      }
+    }),
+  );
+}
+
+function formatSqlTimestamp(value: Date): string {
+  return value.toISOString().replace("T", " ").replace("Z", "");
 }
 
 function getErrorMessage(error: unknown): string {

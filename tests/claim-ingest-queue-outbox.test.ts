@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import {
   cleanupDispatchedClaimIngestQueueOutbox,
+  dispatchPendingClaimIngestQueueOutbox,
   loadClaimIngestQueueOutboxSummary,
   prisma,
 } from "../packages/db/src/index.ts";
@@ -55,6 +56,56 @@ test("claim ingest queue outbox summary reports pending and due backlog for one 
   }
 });
 
+test("claim ingest queue outbox summary aggregates pending and due backlog across organizations", async () => {
+  const firstFixture = await createOutboxFixture("summary-global-a");
+  const secondFixture = await createOutboxFixture("summary-global-b");
+  const now = new Date("2026-03-12T18:00:00.000Z");
+
+  try {
+    await createOutboxRow({
+      organizationId: firstFixture.organizationId,
+      claimId: firstFixture.claimId,
+      createdAt: new Date("2026-03-12T17:10:00.000Z"),
+      availableAt: new Date("2026-03-12T17:20:00.000Z"),
+    });
+    await createOutboxRow({
+      organizationId: secondFixture.organizationId,
+      claimId: secondFixture.claimId,
+      createdAt: new Date("2026-03-12T16:50:00.000Z"),
+      availableAt: new Date("2026-03-12T17:05:00.000Z"),
+    });
+    await createOutboxRow({
+      organizationId: secondFixture.organizationId,
+      claimId: secondFixture.claimId,
+      createdAt: new Date("2026-03-12T17:55:00.000Z"),
+      availableAt: new Date("2026-03-12T18:25:00.000Z"),
+    });
+    await createOutboxRow({
+      organizationId: secondFixture.organizationId,
+      claimId: secondFixture.claimId,
+      createdAt: new Date("2026-03-12T16:00:00.000Z"),
+      availableAt: new Date("2026-03-12T16:10:00.000Z"),
+      dispatchedAt: new Date("2026-03-12T16:11:00.000Z"),
+    });
+
+    const summary = await loadClaimIngestQueueOutboxSummary({
+      prismaClient: prisma,
+      now,
+    });
+
+    assert.deepEqual(summary, {
+      pendingCount: 3,
+      dueCount: 2,
+      oldestPendingAgeMinutes: 70,
+      oldestPendingCreatedAt: new Date("2026-03-12T16:50:00.000Z"),
+      oldestDueAgeMinutes: 55,
+      oldestDueAvailableAt: new Date("2026-03-12T17:05:00.000Z"),
+    });
+  } finally {
+    await Promise.all([firstFixture.cleanup(), secondFixture.cleanup()]);
+  }
+});
+
 test("claim ingest queue outbox cleanup deletes only dispatched rows older than the cutoff", async () => {
   const fixture = await createOutboxFixture("cleanup");
 
@@ -101,10 +152,12 @@ test("claim ingest queue outbox cleanup deletes only dispatched rows older than 
       },
     });
 
-    assert.deepEqual(remainingRows, [
-      { id: pendingId },
-      { id: recentDispatchedId },
-    ].sort((left, right) => left.id.localeCompare(right.id)));
+    assert.deepEqual(
+      remainingRows,
+      [{ id: pendingId }, { id: recentDispatchedId }].sort((left, right) =>
+        left.id.localeCompare(right.id),
+      ),
+    );
     const deletedRow = await prisma.claimIngestQueueOutbox.findUnique({
       where: {
         id: oldDispatchedId,
@@ -117,6 +170,106 @@ test("claim ingest queue outbox cleanup deletes only dispatched rows older than 
   } finally {
     await fixture.cleanup();
   }
+});
+
+test("claim ingest queue outbox dispatch honors the configured concurrency limit", async () => {
+  let activeDispatches = 0;
+  let maxActiveDispatches = 0;
+  const dispatchedIds: string[] = [];
+  const pendingBatches = [[{ id: "outbox-a" }, { id: "outbox-b" }, { id: "outbox-c" }], []];
+
+  const result = await dispatchPendingClaimIngestQueueOutbox(
+    {
+      prismaClient: {
+        claimIngestQueueOutbox: {
+          findMany: async () => pendingBatches.shift() ?? [],
+        },
+      } as unknown as typeof prisma,
+      sendMessageFn: async () => ({
+        ok: true,
+        sqsMessageId: "unused",
+      }),
+      batchSize: 3,
+      concurrency: 2,
+      maxBatches: 1,
+    },
+    {
+      dispatchByIdFn: async ({ outboxId }) => {
+        activeDispatches += 1;
+        maxActiveDispatches = Math.max(maxActiveDispatches, activeDispatches);
+        dispatchedIds.push(outboxId);
+        await sleep(20);
+        activeDispatches -= 1;
+        return {
+          kind: "dispatched",
+          outboxId,
+          queueUrl: "https://example.invalid/claims",
+          sqsMessageId: `sqs-${outboxId}`,
+          persisted: true,
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    selectedCount: 3,
+    dispatchedCount: 3,
+    skippedCount: 0,
+    failedCount: 0,
+  });
+  assert.equal(maxActiveDispatches, 2);
+  assert.deepEqual(dispatchedIds.sort(), ["outbox-a", "outbox-b", "outbox-c"]);
+});
+
+test("claim ingest queue outbox dispatch drains multiple batches up to the configured limit", async () => {
+  const findManyCalls: number[] = [];
+  const dispatchedIds: string[] = [];
+  const pendingBatches = [
+    [{ id: "outbox-a" }, { id: "outbox-b" }],
+    [{ id: "outbox-c" }, { id: "outbox-d" }],
+    [{ id: "outbox-e" }],
+  ];
+
+  const result = await dispatchPendingClaimIngestQueueOutbox(
+    {
+      prismaClient: {
+        claimIngestQueueOutbox: {
+          findMany: async ({ take }) => {
+            findManyCalls.push(take as number);
+            return pendingBatches.shift() ?? [];
+          },
+        },
+      } as unknown as typeof prisma,
+      sendMessageFn: async () => ({
+        ok: true,
+        sqsMessageId: "unused",
+      }),
+      batchSize: 2,
+      concurrency: 2,
+      maxBatches: 2,
+    },
+    {
+      dispatchByIdFn: async ({ outboxId }) => {
+        dispatchedIds.push(outboxId);
+        return {
+          kind: "dispatched",
+          outboxId,
+          queueUrl: "https://example.invalid/claims",
+          sqsMessageId: `sqs-${outboxId}`,
+          persisted: true,
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    selectedCount: 4,
+    dispatchedCount: 4,
+    skippedCount: 0,
+    failedCount: 0,
+  });
+  assert.deepEqual(findManyCalls, [2, 2]);
+  assert.deepEqual(dispatchedIds.sort(), ["outbox-a", "outbox-b", "outbox-c", "outbox-d"]);
 });
 
 async function createOutboxFixture(label: string) {
@@ -185,4 +338,8 @@ async function createOutboxRow(input: {
   });
 
   return id;
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }

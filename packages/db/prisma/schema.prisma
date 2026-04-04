@@ -52,18 +52,18 @@ enum ClaimEventType {
 }
 
 model Organization {
-  id                 String               @id @default(cuid())
-  name               String
-  slug               String               @unique
-  createdAt          DateTime             @default(now())
-  updatedAt          DateTime             @updatedAt
-  memberships        Membership[]
-  claims             Claim[]
-  integrationMailbox IntegrationMailbox[]
-  inboundMessages    InboundMessage[]
-  claimAttachments   ClaimAttachment[]
-  claimExtractions   ClaimExtraction[]
-  claimEvents        ClaimEvent[]
+  id                     String                   @id @default(cuid())
+  name                   String
+  slug                   String                   @unique
+  createdAt              DateTime                 @default(now())
+  updatedAt              DateTime                 @updatedAt
+  memberships            Membership[]
+  claims                 Claim[]
+  integrationMailbox     IntegrationMailbox[]
+  inboundMessages        InboundMessage[]
+  claimAttachments       ClaimAttachment[]
+  claimExtractions       ClaimExtraction[]
+  claimEvents            ClaimEvent[]
   claimIngestQueueOutbox ClaimIngestQueueOutbox[]
 }
 
@@ -93,40 +93,40 @@ model Membership {
 }
 
 model Claim {
-  id              String            @id @default(cuid())
-  organizationId  String
-  externalClaimId String?
-  sourceEmail     String?
-  customerName    String?
-  productName     String?
-  serialNumber    String?
-  purchaseDate    DateTime?
-  issueSummary    String?
-  retailer        String?
-  warrantyStatus  WarrantyStatus    @default(UNCLEAR)
-  missingInfo     String[]          @default([])
-  status          ClaimStatus       @default(NEW)
-  processingAttempt Int             @default(0)
-  processingLeaseToken String?
-  processingLeaseClaimedAt DateTime?
-  latestWorkerFailureAt DateTime?
-  latestWorkerFailureReason String?
-  latestWorkerFailureRetryable Boolean?
+  id                              String                   @id @default(cuid())
+  organizationId                  String
+  externalClaimId                 String?
+  sourceEmail                     String?
+  customerName                    String?
+  productName                     String?
+  serialNumber                    String?
+  purchaseDate                    DateTime?
+  issueSummary                    String?
+  retailer                        String?
+  warrantyStatus                  WarrantyStatus           @default(UNCLEAR)
+  missingInfo                     String[]                 @default([])
+  status                          ClaimStatus              @default(NEW)
+  processingAttempt               Int                      @default(0)
+  processingLeaseToken            String?
+  processingLeaseClaimedAt        DateTime?
+  latestWorkerFailureAt           DateTime?
+  latestWorkerFailureReason       String?
+  latestWorkerFailureRetryable    Boolean?
   latestWorkerFailureReceiveCount Int?
-  latestWorkerFailureDisposition String?
-  createdByUserId String?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-  organization    Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  createdByUser   User?             @relation("ClaimCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
-  inboundMessages InboundMessage[]
-  attachments     ClaimAttachment[]
-  extractions     ClaimExtraction[]
-  events          ClaimEvent[]
-  ingestQueueOutbox ClaimIngestQueueOutbox[]
+  latestWorkerFailureDisposition  String?
+  createdByUserId                 String?
+  createdAt                       DateTime                 @default(now())
+  updatedAt                       DateTime                 @updatedAt
+  organization                    Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdByUser                   User?                    @relation("ClaimCreatedBy", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  inboundMessages                 InboundMessage[]
+  attachments                     ClaimAttachment[]
+  extractions                     ClaimExtraction[]
+  events                          ClaimEvent[]
+  ingestQueueOutbox               ClaimIngestQueueOutbox[]
 
   @@unique([organizationId, externalClaimId])
-  @@index([organizationId, status, createdAt])
+  @@index([organizationId, status, createdAt, id], map: "Claim_organizationId_status_createdAt_id_idx")
   @@index([organizationId, status, updatedAt, id], map: "Claim_organizationId_status_updatedAt_id_idx")
   @@index([organizationId, status, latestWorkerFailureAt, id], map: "Claim_error_failure_at_idx")
   @@index([organizationId, status, latestWorkerFailureReceiveCount, updatedAt, id], map: "Claim_error_failure_count_idx")
@@ -158,9 +158,10 @@ model ClaimIngestQueueOutbox {
   organization           Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   claim                  Claim        @relation(fields: [claimId], references: [id], onDelete: Cascade)
 
-  @@index([organizationId, createdAt], map: "ClaimIngestQueueOutbox_organizationId_createdAt_idx")
   @@index([claimId, createdAt], map: "ClaimIngestQueueOutbox_claimId_createdAt_idx")
-  @@index([dispatchedAt, availableAt, createdAt], map: "ClaimIngestQueueOutbox_dispatch_state_idx")
+  @@index([dispatchedAt, availableAt, createdAt, id], map: "ClaimIngestQueueOutbox_dispatch_state_idx")
+  @@index([organizationId, dispatchedAt, createdAt, id], map: "ClaimIngestQueueOutbox_org_dispatch_created_id_idx")
+  @@index([organizationId, dispatchedAt, availableAt, id], map: "ClaimIngestQueueOutbox_org_dispatch_available_id_idx")
 }
 
 model IntegrationMailbox {

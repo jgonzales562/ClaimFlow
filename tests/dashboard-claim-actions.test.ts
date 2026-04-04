@@ -67,6 +67,7 @@ test("dashboard review action redirects to no_changes without revalidation", asy
     "/dashboard/claims/claim-1?notice=no_changes",
   );
   assert.deepEqual(harness.revalidatedPaths, []);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
 });
 
 test("dashboard review action revalidates and redirects on success", async () => {
@@ -96,6 +97,7 @@ test("dashboard review action revalidates and redirects on success", async () =>
     missingInfo: ["serial_number", "receipt"],
   });
   assert.deepEqual(harness.revalidatedPaths, ["/dashboard", "/dashboard/claims/claim-1"]);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, [DEFAULT_AUTH.organizationId]);
 });
 
 test("dashboard status action rejects invalid targets", async () => {
@@ -124,6 +126,7 @@ test("dashboard status action redirects invalid transitions", async () => {
     "/dashboard/claims/claim-1?error=invalid_status_transition",
   );
   assert.deepEqual(harness.revalidatedPaths, []);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
 });
 
 test("dashboard status action redirects unchanged statuses", async () => {
@@ -164,6 +167,7 @@ test("dashboard status action revalidates and redirects on success", async () =>
     targetStatus: "READY",
   });
   assert.deepEqual(harness.revalidatedPaths, ["/dashboard", "/dashboard/claims/claim-1"]);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, [DEFAULT_AUTH.organizationId]);
 });
 
 test("dashboard retry action redirects when the claim is not eligible for retry", async () => {
@@ -178,6 +182,7 @@ test("dashboard retry action redirects when the claim is not eligible for retry"
 
   assert.equal(harness.retryCalls.length, 0);
   assert.deepEqual(harness.revalidatedPaths, []);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
 });
 
 test("dashboard retry action revalidates and redirects back to the triage page on success", async () => {
@@ -212,6 +217,7 @@ test("dashboard retry action revalidates and redirects back to the triage page o
     "/dashboard/errors",
     "/dashboard/claims/claim-1",
   ]);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, [DEFAULT_AUTH.organizationId]);
 });
 
 test("dashboard processing recovery action redirects when the claim is not eligible", async () => {
@@ -226,6 +232,7 @@ test("dashboard processing recovery action redirects when the claim is not eligi
 
   assert.equal(harness.recoveryCalls.length, 0);
   assert.deepEqual(harness.revalidatedPaths, []);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
 });
 
 test("dashboard processing recovery action revalidates and redirects on success", async () => {
@@ -256,6 +263,7 @@ test("dashboard processing recovery action revalidates and redirects on success"
     claimId: "claim-1",
   });
   assert.deepEqual(harness.revalidatedPaths, ["/dashboard", "/dashboard/claims/claim-1"]);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, [DEFAULT_AUTH.organizationId]);
 });
 
 const DEFAULT_AUTH = {
@@ -266,6 +274,7 @@ const DEFAULT_AUTH = {
 
 function createHarness(overrides: Partial<Parameters<typeof createDashboardClaimActionHandlers>[0]> = {}) {
   const revalidatedPaths: string[] = [];
+  const revalidatedSummaryOrganizations: string[] = [];
   const updateCalls: Array<Record<string, unknown>> = [];
   const transitionCalls: Array<Record<string, unknown>> = [];
   const retryCalls: Array<Record<string, unknown>> = [];
@@ -280,6 +289,11 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
     revalidatePathFn: overrides.revalidatePathFn ?? ((path: string) => {
       revalidatedPaths.push(path);
     }),
+    revalidateDashboardSummaryCacheFn:
+      overrides.revalidateDashboardSummaryCacheFn ??
+      ((organizationId: string) => {
+        revalidatedSummaryOrganizations.push(organizationId);
+      }),
     updateClaimReviewFn: overrides.updateClaimReviewFn ?? (async (input) => {
       updateCalls.push(input as unknown as Record<string, unknown>);
       return { kind: "updated", claimId: input.claimId, changedFields: [] };
@@ -318,6 +332,7 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
   return {
     handlers,
     revalidatedPaths,
+    revalidatedSummaryOrganizations,
     updateCalls,
     transitionCalls,
     retryCalls,

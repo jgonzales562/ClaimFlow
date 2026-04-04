@@ -67,17 +67,17 @@ test("error claims returns filtered total count instead of the current page leng
       const result = await listErrorClaims({
         organizationId,
         filters: {
-        status: null,
-        search: "blender",
-        createdFrom: null,
-        createdTo: null,
-      },
-      sort: "updated_desc",
-      retryability: null,
-      failureDisposition: null,
-      limit: 1,
-      cursor: null,
-      direction: "next",
+          status: null,
+          search: "blender",
+          createdFrom: null,
+          createdTo: null,
+        },
+        sort: "updated_desc",
+        retryability: null,
+        failureDisposition: null,
+        limit: 1,
+        cursor: null,
+        direction: "next",
       });
 
       assert.equal(result.claims.length, 1);
@@ -206,6 +206,55 @@ test("error claims paginates forward and backward using updated-at cursors", asy
     assert.deepEqual(
       previousPage.claims.map((claim) => claim.externalClaimId),
       [newest.externalClaimId, middle.externalClaimId],
+    );
+  } finally {
+    await cleanup();
+  }
+});
+
+test("error claims treat full email searches as exact source email matches", async () => {
+  const { organizationId, cleanup } = await createErrorClaimsFixture();
+
+  try {
+    const exactEmailClaim = await createErrorClaim({
+      organizationId,
+      externalClaimId: "exact-email-claim",
+      productName: "Toaster",
+      updatedAt: new Date("2026-02-04T12:00:00.000Z"),
+      failureReason: "email exact failure",
+      sourceEmail: "customer@example.com",
+    });
+
+    await createErrorClaim({
+      organizationId,
+      externalClaimId: "email-mentioned-claim",
+      productName: "Microwave",
+      updatedAt: new Date("2026-02-03T12:00:00.000Z"),
+      failureReason: "mentioned email failure",
+      issueSummary: "Follow up with the customer about this warranty issue.",
+      sourceEmail: "customer@example.com.au",
+    });
+
+    const result = await listErrorClaims({
+      organizationId,
+      filters: {
+        status: null,
+        search: "customer@example.com",
+        createdFrom: null,
+        createdTo: null,
+      },
+      sort: "updated_desc",
+      retryability: null,
+      failureDisposition: null,
+      limit: 10,
+      cursor: null,
+      direction: "next",
+    });
+
+    assert.equal(result.totalCount, 1);
+    assert.deepEqual(
+      result.claims.map((claim) => claim.externalClaimId),
+      [exactEmailClaim.externalClaimId],
     );
   } finally {
     await cleanup();
@@ -714,10 +763,7 @@ test("error claims filters by latest worker-failure disposition", async () => {
       droppedResult.claims.map((claim) => claim.externalClaimId),
       [droppedClaim.externalClaimId],
     );
-    assert.equal(
-      droppedResult.claims[0]?.failure?.failureDisposition,
-      "dropped_non_retryable",
-    );
+    assert.equal(droppedResult.claims[0]?.failure?.failureDisposition, "dropped_non_retryable");
 
     const unknownResult = await listErrorClaims({
       organizationId,
@@ -788,6 +834,8 @@ async function createErrorClaim(input: {
   productName: string;
   updatedAt: Date;
   failureReason: string;
+  sourceEmail?: string;
+  issueSummary?: string;
   failureOccurredAt?: Date;
   processingAttempt?: number;
   retryable?: boolean;
@@ -800,10 +848,10 @@ async function createErrorClaim(input: {
     data: {
       organizationId: input.organizationId,
       externalClaimId: input.externalClaimId,
-      sourceEmail: `${input.externalClaimId}@example.com`,
+      sourceEmail: input.sourceEmail ?? `${input.externalClaimId}@example.com`,
       customerName: `Customer ${input.externalClaimId}`,
       productName: input.productName,
-      issueSummary: `Issue for ${input.externalClaimId}`,
+      issueSummary: input.issueSummary ?? `Issue for ${input.externalClaimId}`,
       status: "ERROR",
       processingAttempt: input.processingAttempt ?? 0,
     },

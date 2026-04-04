@@ -46,11 +46,20 @@ export type DashboardOperationalSummary = {
   };
 };
 
-export type DashboardClaimsPage = DashboardOperationalSummary & {
+export type DashboardPageSummary = {
+  totalClaims: number;
+  statusCounts: DashboardStatusCounts;
+  staleProcessingCount: number;
+  operationalActivity: DashboardOperationalActivity;
+};
+
+export type DashboardClaimsWindow = {
   claims: DashboardClaimRecord[];
   nextCursor: string | null;
   prevCursor: string | null;
 };
+
+export type DashboardClaimsPage = DashboardPageSummary & DashboardClaimsWindow;
 
 const DEFAULT_DASHBOARD_PAGE_SIZE = 100;
 const dashboardOrderByDesc: Prisma.ClaimOrderByWithRelationInput[] = [
@@ -71,38 +80,48 @@ export async function listDashboardClaims(input: {
   pageSize?: number;
   now?: Date;
 }): Promise<DashboardClaimsPage> {
-  const pageSize = input.pageSize ?? DEFAULT_DASHBOARD_PAGE_SIZE;
-  const now = input.now ?? new Date();
-
-  const [
-    claimsWindow,
-    operationalSummary,
-  ] = await Promise.all([
-    prisma.claim.findMany({
-      where: applyTimestampCursor(
-        buildClaimWhereInput(input.organizationId, input.filters),
-        input.cursor,
-        input.direction,
-        "createdAt",
-      ),
-      orderBy: input.direction === "prev" ? dashboardOrderByAsc : dashboardOrderByDesc,
-      take: pageSize + 1,
-      select: {
-        id: true,
-        externalClaimId: true,
-        customerName: true,
-        productName: true,
-        status: true,
-        warrantyStatus: true,
-        createdAt: true,
-        updatedAt: true,
-      },
-    }),
-    loadDashboardOperationalSummary({
+  const [claimsWindow, summary] = await Promise.all([
+    listDashboardClaimWindow(input),
+    loadDashboardPageSummary({
       organizationId: input.organizationId,
-      now,
+      now: input.now,
     }),
   ]);
+
+  return {
+    ...summary,
+    ...claimsWindow,
+  };
+}
+
+export async function listDashboardClaimWindow(input: {
+  organizationId: string;
+  filters: ClaimFilters;
+  cursor: TimestampCursor | null;
+  direction: PageDirection;
+  pageSize?: number;
+}): Promise<DashboardClaimsWindow> {
+  const pageSize = input.pageSize ?? DEFAULT_DASHBOARD_PAGE_SIZE;
+  const claimsWindow = await prisma.claim.findMany({
+    where: applyTimestampCursor(
+      buildClaimWhereInput(input.organizationId, input.filters),
+      input.cursor,
+      input.direction,
+      "createdAt",
+    ),
+    orderBy: input.direction === "prev" ? dashboardOrderByAsc : dashboardOrderByDesc,
+    take: pageSize + 1,
+    select: {
+      id: true,
+      externalClaimId: true,
+      customerName: true,
+      productName: true,
+      status: true,
+      warrantyStatus: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
   const hasMoreInDirection = claimsWindow.length > pageSize;
   const pageSlice = hasMoreInDirection ? claimsWindow.slice(0, pageSize) : claimsWindow;
   const claims = input.direction === "prev" ? [...pageSlice].reverse() : pageSlice;
@@ -128,7 +147,6 @@ export async function listDashboardClaims(input: {
     : null;
 
   return {
-    ...operationalSummary,
     claims: claims.map((claim) => ({
       ...claim,
       isProcessingStale: isClaimProcessingStale(claim.status, claim.updatedAt),
@@ -138,23 +156,40 @@ export async function listDashboardClaims(input: {
   };
 }
 
-export async function loadDashboardOperationalSummary(input: {
+export async function loadDashboardPageSummary(input: {
   organizationId: string;
   now?: Date;
-}): Promise<DashboardOperationalSummary> {
+}): Promise<DashboardPageSummary> {
   const now = input.now ?? new Date();
   const staleProcessingBefore = getClaimProcessingStaleBefore(now);
 
-  const [
-    statusSummary,
-    operationalActivity,
-    ingestQueueOutbox,
-  ] = await Promise.all([
+  const [statusSummary, operationalActivity] = await Promise.all([
     loadClaimStatusSummary({
       organizationId: input.organizationId,
       staleProcessingBefore,
     }),
     loadClaimOperationalActivity({
+      organizationId: input.organizationId,
+      now,
+    }),
+  ]);
+
+  return {
+    totalClaims: statusSummary.totalClaims,
+    statusCounts: statusSummary.statusCounts,
+    staleProcessingCount: statusSummary.staleProcessingCount,
+    operationalActivity,
+  };
+}
+
+export async function loadDashboardOperationalSummary(input: {
+  organizationId: string;
+  now?: Date;
+}): Promise<DashboardOperationalSummary> {
+  const now = input.now ?? new Date();
+
+  const [pageSummary, ingestQueueOutbox] = await Promise.all([
+    loadDashboardPageSummary({
       organizationId: input.organizationId,
       now,
     }),
@@ -166,10 +201,7 @@ export async function loadDashboardOperationalSummary(input: {
   ]);
 
   return {
-    totalClaims: statusSummary.totalClaims,
-    statusCounts: statusSummary.statusCounts,
-    staleProcessingCount: statusSummary.staleProcessingCount,
-    operationalActivity,
+    ...pageSummary,
     ingestQueueOutbox,
   };
 }

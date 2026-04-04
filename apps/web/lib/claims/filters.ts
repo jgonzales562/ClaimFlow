@@ -2,6 +2,7 @@ import type { Prisma } from "@prisma/client";
 
 export const CLAIM_STATUSES = ["NEW", "PROCESSING", "REVIEW_REQUIRED", "READY", "ERROR"] as const;
 export type ClaimStatus = (typeof CLAIM_STATUSES)[number];
+const EXACT_EMAIL_SEARCH_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
 export type ClaimFilters = {
   status: ClaimStatus | null;
@@ -42,38 +43,26 @@ export function buildClaimWhereInput(
   }
 
   if (filters.search) {
-    whereClause.OR = [
-      {
-        externalClaimId: {
-          contains: filters.search,
-          mode: "insensitive",
-        },
-      },
-      {
-        customerName: {
-          contains: filters.search,
-          mode: "insensitive",
-        },
-      },
-      {
-        productName: {
-          contains: filters.search,
-          mode: "insensitive",
-        },
-      },
-      {
-        issueSummary: {
-          contains: filters.search,
-          mode: "insensitive",
-        },
-      },
-      {
-        sourceEmail: {
-          contains: filters.search,
-          mode: "insensitive",
-        },
-      },
-    ];
+    const exactEmailSearch = normalizeExactEmailSearchTerm(filters.search);
+    whereClause.OR = exactEmailSearch
+      ? [
+          {
+            sourceEmail: {
+              equals: exactEmailSearch,
+              mode: "insensitive",
+            },
+          },
+          ...buildBroadClaimSearchConditions(filters.search),
+        ]
+      : [
+          ...buildBroadClaimSearchConditions(filters.search),
+          {
+            sourceEmail: {
+              contains: filters.search,
+              mode: "insensitive",
+            },
+          },
+        ];
   }
 
   return whereClause;
@@ -144,6 +133,15 @@ export function readSearchParam(
   return null;
 }
 
+export function normalizeExactEmailSearchTerm(value: string | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return EXACT_EMAIL_SEARCH_PATTERN.test(normalized) ? normalized : null;
+}
+
 function parseClaimFilters(readValue: (key: string) => string | null): ClaimFilters {
   return {
     status: normalizeClaimStatus(readValue("status")),
@@ -197,4 +195,33 @@ function parseIsoDate(value: string | null): Date | null {
 
   const parsed = new Date(`${trimmed}T00:00:00.000Z`);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function buildBroadClaimSearchConditions(search: string): Prisma.ClaimWhereInput[] {
+  return [
+    {
+      externalClaimId: {
+        contains: search,
+        mode: "insensitive",
+      },
+    },
+    {
+      customerName: {
+        contains: search,
+        mode: "insensitive",
+      },
+    },
+    {
+      productName: {
+        contains: search,
+        mode: "insensitive",
+      },
+    },
+    {
+      issueSummary: {
+        contains: search,
+        mode: "insensitive",
+      },
+    },
+  ];
 }

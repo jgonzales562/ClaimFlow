@@ -1,7 +1,7 @@
 import { prisma } from "@claimflow/db";
 import { Prisma } from "@prisma/client";
 import { parsePageDirection, type PageDirection } from "./cursor-pagination";
-import type { ClaimFilters } from "./filters";
+import { normalizeExactEmailSearchTerm, type ClaimFilters } from "./filters";
 import { readWorkerFailureSnapshot, type WorkerFailureEvent } from "./worker-failure";
 
 export type ErrorClaimRecord = {
@@ -45,13 +45,8 @@ export type ErrorClaimsCursor =
   | ReceiveCountErrorClaimsCursor
   | FailureOldestErrorClaimsCursor;
 export type ErrorClaimsPageDirection = PageDirection;
-export const ERROR_CLAIM_RETRYABILITY_FILTERS = [
-  "retryable",
-  "non_retryable",
-  "unknown",
-] as const;
-export type ErrorClaimRetryabilityFilter =
-  (typeof ERROR_CLAIM_RETRYABILITY_FILTERS)[number];
+export const ERROR_CLAIM_RETRYABILITY_FILTERS = ["retryable", "non_retryable", "unknown"] as const;
+export type ErrorClaimRetryabilityFilter = (typeof ERROR_CLAIM_RETRYABILITY_FILTERS)[number];
 export const ERROR_CLAIM_FAILURE_DISPOSITION_FILTERS = [
   "retrying",
   "moved_to_dlq",
@@ -165,8 +160,7 @@ export async function listErrorClaims(input: {
   const pageSlice = hasMoreInDirection ? orderedClaimRows.slice(0, input.limit) : orderedClaimRows;
   const orderedRows = input.direction === "prev" ? [...pageSlice].reverse() : pageSlice;
   const totalCount =
-    orderedRows[0]?.totalCount ??
-    (input.cursor ? await loadErrorClaimTotalCount(baseWhereSql) : 0);
+    orderedRows[0]?.totalCount ?? (input.cursor ? await loadErrorClaimTotalCount(baseWhereSql) : 0);
   return buildErrorClaimsResult({
     claims: orderedRows.map(mapErrorClaimPageRow),
     orderedRows,
@@ -214,11 +208,7 @@ export function parseErrorClaimRetryabilityFilter(
   value: string | null,
 ): ErrorClaimRetryabilityFilter | null {
   const normalized = value?.trim().toLowerCase();
-  if (
-    normalized === "retryable" ||
-    normalized === "non_retryable" ||
-    normalized === "unknown"
-  ) {
+  if (normalized === "retryable" || normalized === "non_retryable" || normalized === "unknown") {
     return normalized;
   }
 
@@ -268,15 +258,28 @@ function buildErrorClaimWhereSql(input: {
 
   if (input.filters.search) {
     const pattern = `%${escapeLikePattern(input.filters.search)}%`;
-    clauses.push(Prisma.sql`
-      (
-        c."externalClaimId" ILIKE ${pattern} ESCAPE '\\'
-        OR c."customerName" ILIKE ${pattern} ESCAPE '\\'
-        OR c."productName" ILIKE ${pattern} ESCAPE '\\'
-        OR c."issueSummary" ILIKE ${pattern} ESCAPE '\\'
-        OR c."sourceEmail" ILIKE ${pattern} ESCAPE '\\'
-      )
-    `);
+    const exactEmailSearch = normalizeExactEmailSearchTerm(input.filters.search);
+    clauses.push(
+      exactEmailSearch
+        ? Prisma.sql`
+            (
+              c."sourceEmail" = ${exactEmailSearch}
+              OR c."externalClaimId" ILIKE ${pattern} ESCAPE '\\'
+              OR c."customerName" ILIKE ${pattern} ESCAPE '\\'
+              OR c."productName" ILIKE ${pattern} ESCAPE '\\'
+              OR c."issueSummary" ILIKE ${pattern} ESCAPE '\\'
+            )
+          `
+        : Prisma.sql`
+            (
+              c."externalClaimId" ILIKE ${pattern} ESCAPE '\\'
+              OR c."customerName" ILIKE ${pattern} ESCAPE '\\'
+              OR c."productName" ILIKE ${pattern} ESCAPE '\\'
+              OR c."issueSummary" ILIKE ${pattern} ESCAPE '\\'
+              OR c."sourceEmail" ILIKE ${pattern} ESCAPE '\\'
+            )
+          `,
+    );
   }
 
   const retryabilityClause = buildRetryabilityWhereSql(input.retryability);
@@ -341,8 +344,7 @@ function buildErrorClaimCursorWhereSql(
     return null;
   }
 
-  const updatedAtSql =
-    scope === "filtered" ? Prisma.sql`f."updatedAt"` : Prisma.sql`c."updatedAt"`;
+  const updatedAtSql = scope === "filtered" ? Prisma.sql`f."updatedAt"` : Prisma.sql`c."updatedAt"`;
   const idSql = scope === "filtered" ? Prisma.sql`f.id` : Prisma.sql`c.id`;
   const failureReceiveCountSql =
     scope === "filtered" ? Prisma.sql`f."failureReceiveCount"` : failureReceiveCountBaseSql;
@@ -437,8 +439,7 @@ function buildErrorClaimOrderBySql(
   direction: ErrorClaimsPageDirection,
   scope: "base" | "filtered" = "base",
 ): Prisma.Sql {
-  const updatedAtSql =
-    scope === "filtered" ? Prisma.sql`f."updatedAt"` : Prisma.sql`c."updatedAt"`;
+  const updatedAtSql = scope === "filtered" ? Prisma.sql`f."updatedAt"` : Prisma.sql`c."updatedAt"`;
   const idSql = scope === "filtered" ? Prisma.sql`f.id` : Prisma.sql`c.id`;
   const failureReceiveCountSql =
     scope === "filtered" ? Prisma.sql`f."failureReceiveCount"` : failureReceiveCountBaseSql;
@@ -603,10 +604,7 @@ function parseFailureOldestErrorClaimsCursor(value: string): FailureOldestErrorC
   };
 }
 
-function encodeUpdatedErrorClaimsCursor(cursor: {
-  timestamp: Date;
-  id: string;
-}): string {
+function encodeUpdatedErrorClaimsCursor(cursor: { timestamp: Date; id: string }): string {
   return `u~${cursor.timestamp.toISOString()}~${cursor.id}`;
 }
 
@@ -618,17 +616,11 @@ function encodeReceiveCountErrorClaimsCursor(cursor: {
   return `r~${cursor.receiveCount}~${cursor.timestamp.toISOString()}~${cursor.id}`;
 }
 
-function encodeFailureOldestErrorClaimsCursor(cursor: {
-  occurredAt: Date;
-  id: string;
-}): string {
+function encodeFailureOldestErrorClaimsCursor(cursor: { occurredAt: Date; id: string }): string {
   return `f~${cursor.occurredAt.toISOString()}~${cursor.id}`;
 }
 
-function encodeErrorClaimsCursor(
-  row: ErrorClaimRow,
-  sort: ErrorClaimSort,
-): string {
+function encodeErrorClaimsCursor(row: ErrorClaimRow, sort: ErrorClaimSort): string {
   if (sort === "receive_count_desc") {
     return encodeReceiveCountErrorClaimsCursor({
       receiveCount: row.failureReceiveCount,
