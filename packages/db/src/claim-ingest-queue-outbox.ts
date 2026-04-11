@@ -176,17 +176,23 @@ export async function loadClaimIngestQueueOutboxSummary(input: {
     }>
   >(Prisma.sql`
     SELECT
-      SUM(
-        CASE
-          WHEN "dispatchedAt" IS NULL THEN 1
-          ELSE 0
-        END
+      COALESCE(
+        SUM(
+          CASE
+            WHEN "dispatchedAt" IS NULL THEN 1
+            ELSE 0
+          END
+        ),
+        0
       )::int AS "pendingCount",
-      SUM(
-        CASE
-          WHEN "dispatchedAt" IS NULL AND "availableAt" <= ${nowSqlTimestamp}::timestamp THEN 1
-          ELSE 0
-        END
+      COALESCE(
+        SUM(
+          CASE
+            WHEN "dispatchedAt" IS NULL AND "availableAt" <= ${nowSqlTimestamp}::timestamp THEN 1
+            ELSE 0
+          END
+        ),
+        0
       )::int AS "dueCount",
       MIN(
         CASE

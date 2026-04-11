@@ -56,7 +56,15 @@ export function createPostmarkInboundHandler(
   const logErrorFn = dependencies.logErrorFn ?? logError;
 
   return async function handlePostmarkInboundRequest(request: Request): Promise<Response> {
-    if (!isAuthorizedRequest(request)) {
+    const authorization = authorizeRequest(request);
+    if (authorization === "misconfigured") {
+      logErrorFn("webhook_auth_not_configured", {
+        route: "/api/webhooks/postmark/inbound",
+      });
+      return Response.json({ error: "Service unavailable" }, { status: 503 });
+    }
+
+    if (authorization === "forbidden") {
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -233,17 +241,17 @@ export async function POST(request: Request): Promise<Response> {
   return defaultPostmarkInboundHandler(request);
 }
 
-function isAuthorizedRequest(request: Request): boolean {
+function authorizeRequest(request: Request): "authorized" | "forbidden" | "misconfigured" {
   const expectedUser = process.env.POSTMARK_WEBHOOK_BASIC_AUTH_USER?.trim();
   const expectedPass = process.env.POSTMARK_WEBHOOK_BASIC_AUTH_PASS?.trim();
 
-  if (!expectedUser && !expectedPass) {
-    return true;
+  if (!expectedUser || !expectedPass) {
+    return "misconfigured";
   }
 
   const headerValue = request.headers.get("authorization");
   if (!headerValue || !headerValue.startsWith("Basic ")) {
-    return false;
+    return "forbidden";
   }
 
   const encoded = headerValue.slice("Basic ".length);
@@ -251,12 +259,12 @@ function isAuthorizedRequest(request: Request): boolean {
   try {
     decoded = Buffer.from(encoded, "base64").toString("utf8");
   } catch {
-    return false;
+    return "forbidden";
   }
 
   const separatorIndex = decoded.indexOf(":");
   if (separatorIndex === -1) {
-    return false;
+    return "forbidden";
   }
 
   const providedUser = decoded.slice(0, separatorIndex);
@@ -265,7 +273,9 @@ function isAuthorizedRequest(request: Request): boolean {
   return (
     secureCompare(providedUser, expectedUser ?? "") &&
     secureCompare(providedPass, expectedPass ?? "")
-  );
+  )
+    ? "authorized"
+    : "forbidden";
 }
 
 async function resolveOrganization(mailboxHash: string | null, prismaClient: typeof prisma) {
@@ -292,7 +302,7 @@ async function resolveOrganization(mailboxHash: string | null, prismaClient: typ
   }
 
   const fallbackSlug = process.env.POSTMARK_DEFAULT_ORG_SLUG?.trim();
-  if (!fallbackSlug) {
+  if (!fallbackSlug || !isPostmarkDefaultOrgFallbackEnabled()) {
     return null;
   }
 
@@ -300,6 +310,10 @@ async function resolveOrganization(mailboxHash: string | null, prismaClient: typ
     where: { slug: fallbackSlug },
     select: { id: true },
   });
+}
+
+function isPostmarkDefaultOrgFallbackEnabled(): boolean {
+  return process.env.POSTMARK_ALLOW_DEFAULT_ORG_FALLBACK?.trim().toLowerCase() === "true";
 }
 
 function isUniqueConstraintError(error: unknown): boolean {

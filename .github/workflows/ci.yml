@@ -8,6 +8,20 @@ on:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: claimflow
+          POSTGRES_USER: claimflowdev
+          POSTGRES_PASSWORD: claimflowdev
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U claimflowdev -d claimflow"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,11 +40,32 @@ jobs:
       - name: Install
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare Test Environment
+        run: |
+          cp .env.example .env
+          python - <<'PY'
+          from pathlib import Path
+
+          env_path = Path(".env")
+          env_text = env_path.read_text()
+          env_text = env_text.replace(
+              'DATABASE_URL="postgresql://claimflowdev:Moonbeem7!@localhost:55432/claimflow?schema=public"',
+              'DATABASE_URL="postgresql://claimflowdev:claimflowdev@127.0.0.1:5432/claimflow?schema=public"',
+          )
+          env_path.write_text(env_text)
+          PY
+
+      - name: Apply Database Migrations
+        run: pnpm db:migrate:deploy
+
       - name: Lint
         run: pnpm lint
 
       - name: Typecheck
         run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
 
       - name: Build
         run: pnpm build

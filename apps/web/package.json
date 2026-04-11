@@ -3,6 +3,8 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "predev": "node ../../scripts/ensure-db-build.mjs",
+    "prebuild": "node ../../scripts/ensure-db-build.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

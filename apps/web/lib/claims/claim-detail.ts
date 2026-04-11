@@ -85,58 +85,6 @@ export async function loadClaimDetail(input: {
       latestWorkerFailureDisposition: true,
       createdAt: true,
       updatedAt: true,
-      attachments: {
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: CLAIM_DETAIL_ATTACHMENT_LIMIT,
-        select: {
-          id: true,
-          uploadStatus: true,
-          originalFilename: true,
-          contentType: true,
-          byteSize: true,
-          createdAt: true,
-        },
-      },
-      extractions: {
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: 1,
-        select: {
-          provider: true,
-          model: true,
-          confidence: true,
-          extraction: true,
-          createdAt: true,
-        },
-      },
-      events: {
-        where: {
-          organizationId: input.organizationId,
-        },
-        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        take: CLAIM_DETAIL_EVENT_LIMIT,
-        select: {
-          id: true,
-          eventType: true,
-          payload: true,
-          createdAt: true,
-          actorUser: {
-            select: {
-              email: true,
-              fullName: true,
-            },
-          },
-        },
-      },
-      _count: {
-        select: {
-          attachments: {
-            where: {
-              organizationId: input.organizationId,
-              uploadStatus: "STORED",
-            },
-          },
-        },
-      },
     },
   });
 
@@ -144,12 +92,70 @@ export async function loadClaimDetail(input: {
     return null;
   }
 
-  const { _count, ...claimRecord } = claim;
+  const [attachments, extractions, events, storedAttachmentCount] = await Promise.all([
+    prisma.claimAttachment.findMany({
+      where: {
+        claimId: claim.id,
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: CLAIM_DETAIL_ATTACHMENT_LIMIT,
+      select: {
+        id: true,
+        uploadStatus: true,
+        originalFilename: true,
+        contentType: true,
+        byteSize: true,
+        createdAt: true,
+      },
+    }),
+    prisma.claimExtraction.findMany({
+      where: {
+        claimId: claim.id,
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 1,
+      select: {
+        provider: true,
+        model: true,
+        confidence: true,
+        extraction: true,
+        createdAt: true,
+      },
+    }),
+    prisma.claimEvent.findMany({
+      where: {
+        claimId: claim.id,
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: CLAIM_DETAIL_EVENT_LIMIT,
+      select: {
+        id: true,
+        eventType: true,
+        payload: true,
+        createdAt: true,
+        actorUser: {
+          select: {
+            email: true,
+            fullName: true,
+          },
+        },
+      },
+    }),
+    prisma.claimAttachment.count({
+      where: {
+        claimId: claim.id,
+        uploadStatus: "STORED",
+      },
+    }),
+  ]);
 
   return {
-    ...claimRecord,
-    isProcessingStale: isClaimProcessingStale(claimRecord.status, claimRecord.updatedAt),
-    storedAttachmentCount: _count.attachments,
-    latestFailure: readWorkerFailureSnapshot(claimRecord),
+    ...claim,
+    attachments,
+    extractions,
+    events,
+    isProcessingStale: isClaimProcessingStale(claim.status, claim.updatedAt),
+    storedAttachmentCount,
+    latestFailure: readWorkerFailureSnapshot(claim),
   };
 }

@@ -76,6 +76,8 @@ pnpm db:local:start
 bash -lc 'set -a && source .env && set +a && pnpm db:migrate:deploy && pnpm db:seed'
 ```
 
+If `CLAIMFLOW_SEED_ADMIN_PASSWORD` is blank, `pnpm db:seed` prints a generated admin password for that run.
+
 5. Start the web app:
 
 ```bash
@@ -111,9 +113,12 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 
 - `DATABASE_URL`
 - `SESSION_SECRET`
+- `CLAIMFLOW_SEED_ADMIN_EMAIL`
+- `CLAIMFLOW_SEED_ADMIN_PASSWORD`
 - `POSTMARK_WEBHOOK_BASIC_AUTH_USER`
 - `POSTMARK_WEBHOOK_BASIC_AUTH_PASS`
 - `POSTMARK_DEFAULT_ORG_SLUG`
+- `POSTMARK_ALLOW_DEFAULT_ORG_FALLBACK`
 - `AWS_REGION`
 - `ATTACHMENTS_S3_BUCKET`
 - `CLAIMS_INGEST_QUEUE_URL`
@@ -145,5 +150,5 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 
 GitHub Actions includes:
 
-- `CI` on push to `main` and pull requests, running `pnpm lint`, `pnpm typecheck`, and `pnpm build`
+- `CI` on push to `main` and pull requests, running `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm build`
 - `Claims Health` on a 10-minute schedule and manual dispatch when `CLAIMS_HEALTHCHECK_URL` and `CLAIMS_HEALTH_BEARER_TOKEN` repo secrets are configured

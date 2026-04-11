@@ -56,6 +56,30 @@ test("claim ingest queue outbox summary reports pending and due backlog for one 
   }
 });
 
+test("claim ingest queue outbox summary returns zero counts when no rows exist", async () => {
+  const fixture = await createOutboxFixture("summary-empty");
+  const now = new Date("2026-03-12T18:00:00.000Z");
+
+  try {
+    const summary = await loadClaimIngestQueueOutboxSummary({
+      prismaClient: prisma,
+      organizationId: fixture.organizationId,
+      now,
+    });
+
+    assert.deepEqual(summary, {
+      pendingCount: 0,
+      dueCount: 0,
+      oldestPendingAgeMinutes: null,
+      oldestPendingCreatedAt: null,
+      oldestDueAgeMinutes: null,
+      oldestDueAvailableAt: null,
+    });
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 test("claim ingest queue outbox summary aggregates pending and due backlog across organizations", async () => {
   const firstFixture = await createOutboxFixture("summary-global-a");
   const secondFixture = await createOutboxFixture("summary-global-b");

@@ -59,12 +59,26 @@ model Organization {
   updatedAt              DateTime                 @updatedAt
   memberships            Membership[]
   claims                 Claim[]
+  claimOrganizationSummary ClaimOrganizationSummary?
   integrationMailbox     IntegrationMailbox[]
   inboundMessages        InboundMessage[]
   claimAttachments       ClaimAttachment[]
   claimExtractions       ClaimExtraction[]
   claimEvents            ClaimEvent[]
   claimIngestQueueOutbox ClaimIngestQueueOutbox[]
+}
+
+model ClaimOrganizationSummary {
+  organizationId        String       @id
+  totalClaims           Int          @default(0)
+  newCount              Int          @default(0)
+  processingCount       Int          @default(0)
+  reviewRequiredCount   Int          @default(0)
+  readyCount            Int          @default(0)
+  errorCount            Int          @default(0)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 model User {

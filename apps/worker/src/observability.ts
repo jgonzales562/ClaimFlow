@@ -3,6 +3,12 @@ import type { WorkerConfig } from "./config.js";
 
 let workerSentryEnabled = false;
 
+function shouldEmitStructuredLogs(): boolean {
+  const isTestRuntime =
+    process.env.NODE_ENV === "test" || Boolean(process.env.NODE_TEST_CONTEXT);
+  return !isTestRuntime || process.env.CLAIMFLOW_ENABLE_TEST_LOGS === "true";
+}
+
 export function initWorkerSentry(config: WorkerConfig): void {
   if (!config.sentryDsn || workerSentryEnabled) {
     return;
@@ -45,6 +51,10 @@ export function captureWorkerException(
 }
 
 export function logInfo(event: string, context: Record<string, unknown>): void {
+  if (!shouldEmitStructuredLogs()) {
+    return;
+  }
+
   console.log(
     JSON.stringify({
       level: "info",
@@ -56,6 +66,10 @@ export function logInfo(event: string, context: Record<string, unknown>): void {
 }
 
 export function logError(event: string, context: Record<string, unknown>): void {
+  if (!shouldEmitStructuredLogs()) {
+    return;
+  }
+
   console.error(
     JSON.stringify({
       level: "error",

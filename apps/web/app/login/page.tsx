@@ -28,7 +28,9 @@ const loginAssurances = [
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const resolvedSearchParams = searchParams ? await searchParams : {};
   const error = resolvedSearchParams.error;
+  const redirect = resolvedSearchParams.redirect;
   const errorValue = Array.isArray(error) ? error[0] : error;
+  const redirectValue = Array.isArray(redirect) ? redirect[0] : redirect;
 
   return (
     <main className="login-shell">
@@ -104,36 +106,22 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           ) : null}
 
           <form action="/api/auth/login" method="post" className="login-form">
+            {redirectValue ? <input type="hidden" name="redirect" value={redirectValue} /> : null}
+
             <label className="field-label">
               <span>Email</span>
-              <input
-                className="control"
-                type="email"
-                name="email"
-                required
-                defaultValue="admin@claimflow.local"
-              />
+              <input className="control" type="email" name="email" required />
             </label>
 
             <label className="field-label">
               <span>Password</span>
-              <input
-                className="control"
-                type="password"
-                name="password"
-                required
-                defaultValue="Moonbeem7!"
-              />
+              <input className="control" type="password" name="password" required />
             </label>
 
             <button type="submit" className="button button--primary">
               Sign in
             </button>
           </form>
-
-          <p className="dev-hint">
-            Development access: <code>admin@claimflow.local</code> / <code>Moonbeem7!</code>
-          </p>
 
           <div className="login-footer">
             <p className="copy-reset subtle-text">

@@ -73,6 +73,30 @@ test("login form redirects invalid credentials back to the login page", async ()
   assert.equal(response.headers.get("location"), "http://localhost/login?error=invalid_credentials");
 });
 
+test("login form preserves a validated redirect target when credentials are rejected", async () => {
+  const handler = createLoginHandler({
+    findUserByEmailFn: async () => null,
+  });
+
+  const formData = new FormData();
+  formData.set("email", "analyst@example.com");
+  formData.set("password", "wrong-password");
+  formData.set("redirect", "/dashboard/claims/claim-1?tab=history");
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      body: formData,
+    }),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(
+    response.headers.get("location"),
+    "http://localhost/login?error=invalid_credentials&redirect=%2Fdashboard%2Fclaims%2Fclaim-1%3Ftab%3Dhistory",
+  );
+});
+
 test("login JSON rejects users without memberships", async () => {
   const handler = createLoginHandler({
     findUserByEmailFn: async () => ({ ...baseUser, memberships: [] }),
@@ -249,6 +273,56 @@ test("login form redirects to the dashboard and sets the session cookie on succe
   assert.equal(response.status, 303);
   assert.equal(response.headers.get("location"), "http://localhost/dashboard");
   assert.match(response.headers.get("set-cookie") ?? "", /^claimflow_session=session-token-value;/);
+});
+
+test("login form redirects back to a validated dashboard path on success", async () => {
+  const handler = createLoginHandler({
+    findUserByEmailFn: async () => ({ ...baseUser }),
+    verifyPasswordFn: async () => true,
+    createSessionTokenFn: () => "session-token-value",
+  });
+
+  const formData = new FormData();
+  formData.set("email", "analyst@example.com");
+  formData.set("password", "correct-password");
+  formData.set("redirect", "/dashboard/claims/claim-1?notice=resume");
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      body: formData,
+    }),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(
+    response.headers.get("location"),
+    "http://localhost/dashboard/claims/claim-1?notice=resume",
+  );
+  assert.match(response.headers.get("set-cookie") ?? "", /^claimflow_session=session-token-value;/);
+});
+
+test("login form ignores unsafe redirect targets", async () => {
+  const handler = createLoginHandler({
+    findUserByEmailFn: async () => ({ ...baseUser }),
+    verifyPasswordFn: async () => true,
+    createSessionTokenFn: () => "session-token-value",
+  });
+
+  const formData = new FormData();
+  formData.set("email", "analyst@example.com");
+  formData.set("password", "correct-password");
+  formData.set("redirect", "https://example.com/steal-session");
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      body: formData,
+    }),
+  );
+
+  assert.equal(response.status, 303);
+  assert.equal(response.headers.get("location"), "http://localhost/dashboard");
 });
 
 test("logout JSON clears the session cookie", async () => {

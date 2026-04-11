@@ -4,9 +4,11 @@ import { ClaimStatus, MembershipRole, PrismaClient, WarrantyStatus } from "@pris
 
 const prisma = new PrismaClient();
 const scrypt = promisify(scryptCallback);
+const DEFAULT_SEED_ADMIN_EMAIL = "admin@claimflow.local";
+const DEFAULT_SEED_ADMIN_FULL_NAME = "ClaimFlow Admin";
 
 async function main(): Promise<void> {
-  const adminPasswordHash = await hashPassword("Moonbeem7!");
+  const seedAdmin = await resolveSeedAdminCredentials();
 
   const organization = await prisma.organization.upsert({
     where: { slug: "acme-warranty" },
@@ -18,15 +20,15 @@ async function main(): Promise<void> {
   });
 
   const adminUser = await prisma.user.upsert({
-    where: { email: "admin@claimflow.local" },
+    where: { email: seedAdmin.email },
     update: {
-      fullName: "ClaimFlow Admin",
-      passwordHash: adminPasswordHash,
+      fullName: seedAdmin.fullName,
+      passwordHash: seedAdmin.passwordHash,
     },
     create: {
-      email: "admin@claimflow.local",
-      fullName: "ClaimFlow Admin",
-      passwordHash: adminPasswordHash,
+      email: seedAdmin.email,
+      fullName: seedAdmin.fullName,
+      passwordHash: seedAdmin.passwordHash,
     },
   });
 
@@ -443,12 +445,63 @@ async function main(): Promise<void> {
       emailAddress: "claims+acme@inbound.claimflow.dev",
     },
   });
+
+  logSeedAdminSummary(seedAdmin);
 }
 
 async function hashPassword(password: string): Promise<string> {
   const salt = randomBytes(16);
   const key = (await scrypt(password, salt, 64)) as Buffer;
   return `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+}
+
+async function resolveSeedAdminCredentials(): Promise<{
+  email: string;
+  fullName: string;
+  passwordHash: string;
+  passwordSource: "env" | "generated";
+  generatedPassword: string | null;
+}> {
+  const email = readSeedAdminEmail();
+  const configuredPassword = process.env.CLAIMFLOW_SEED_ADMIN_PASSWORD?.trim();
+  const generatedPassword = configuredPassword ? null : generateSeedAdminPassword();
+  const password = configuredPassword ?? generatedPassword;
+
+  if (!password) {
+    throw new Error("Seed admin password could not be resolved.");
+  }
+
+  return {
+    email,
+    fullName: DEFAULT_SEED_ADMIN_FULL_NAME,
+    passwordHash: await hashPassword(password),
+    passwordSource: configuredPassword ? "env" : "generated",
+    generatedPassword,
+  };
+}
+
+function readSeedAdminEmail(): string {
+  const configuredEmail = process.env.CLAIMFLOW_SEED_ADMIN_EMAIL?.trim().toLowerCase();
+  return configuredEmail || DEFAULT_SEED_ADMIN_EMAIL;
+}
+
+function generateSeedAdminPassword(): string {
+  return `seed-${randomBytes(18).toString("hex")}`;
+}
+
+function logSeedAdminSummary(input: {
+  email: string;
+  passwordSource: "env" | "generated";
+  generatedPassword: string | null;
+}): void {
+  console.log(`[seed] Admin login email: ${input.email}`);
+
+  if (input.passwordSource === "env") {
+    console.log("[seed] Admin password source: CLAIMFLOW_SEED_ADMIN_PASSWORD");
+    return;
+  }
+
+  console.log(`[seed] Admin password generated for this seed run: ${input.generatedPassword}`);
 }
 
 async function setClaimLatestWorkerFailureSnapshot(

@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "packageManager": "pnpm@9.15.4",
   "scripts": {
-    "build": "pnpm -r build",
+    "build": "env CLAIMFLOW_SKIP_DB_PREBUILD=true pnpm -r build",
     "lint": "pnpm -r lint",
     "test": "TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/*.test.ts",
     "test:smoke": "TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/full-pipeline-smoke.test.ts",

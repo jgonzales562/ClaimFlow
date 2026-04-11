@@ -27,9 +27,11 @@ Or directly:
 ## Environment
 
 Set `DATABASE_URL` in your environment (see `.env.example`).
+You can also set `CLAIMFLOW_SEED_ADMIN_EMAIL` and `CLAIMFLOW_SEED_ADMIN_PASSWORD` to control the seeded admin login.
 
 ## Notes
 
 - Search optimizations use PostgreSQL `pg_trgm` indexes (created by migrations). Ensure extension creation is allowed in your target database.
 - The local Postgres helper manages the repo-owned cluster in `.postgres-data` and reads `DATABASE_URL` from `.env` for the host/port.
 - If you run `pnpm db:seed` from a plain shell, make sure `DATABASE_URL` is exported first. One reliable option is `bash -lc 'set -a && source .env && set +a && pnpm db:seed'`.
+- If `CLAIMFLOW_SEED_ADMIN_PASSWORD` is blank, the seed script generates a fresh admin password and prints it.

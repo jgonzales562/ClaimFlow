@@ -5,17 +5,16 @@ const scrypt = promisify(scryptCallback);
 const SCRYPT_PREFIX = "scrypt";
 
 export async function verifyPassword(password: string, passwordHash: string): Promise<boolean> {
-  if (!passwordHash.startsWith(`${SCRYPT_PREFIX}$`)) {
-    // Legacy fallback for pre-hash seeded records.
-    return password === passwordHash;
-  }
-
   const parts = passwordHash.split("$");
-  if (parts.length !== 3) {
+  if (parts.length !== 3 || parts[0] !== SCRYPT_PREFIX) {
     return false;
   }
 
   const [, saltHex, keyHex] = parts;
+  if (!isValidHexToken(saltHex) || !isValidHexToken(keyHex)) {
+    return false;
+  }
+
   const salt = Buffer.from(saltHex, "hex");
   const storedKey = Buffer.from(keyHex, "hex");
   const derivedKey = (await scrypt(password, salt, storedKey.length)) as Buffer;
@@ -25,4 +24,8 @@ export async function verifyPassword(password: string, passwordHash: string): Pr
   }
 
   return timingSafeEqual(storedKey, derivedKey);
+}
+
+function isValidHexToken(value: string): boolean {
+  return value.length > 0 && value.length % 2 === 0 && /^[0-9a-f]+$/i.test(value);
 }

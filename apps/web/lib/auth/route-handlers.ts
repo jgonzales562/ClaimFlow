@@ -43,6 +43,12 @@ type LogoutDependencies = {
   getExpiredSessionCookieOptionsFn?: typeof getExpiredSessionCookieOptions;
 };
 
+type ParsedFormLoginRequest = {
+  email: string | null;
+  password: string | null;
+  redirectTo: string | null;
+};
+
 export function createLoginHandler(dependencies: LoginDependencies = {}) {
   const findUserByEmailFn =
     dependencies.findUserByEmailFn ??
@@ -79,15 +85,21 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
 
   return async function POST(request: Request): Promise<Response> {
     const isJsonRequest = request.headers.get("content-type")?.includes("application/json") ?? false;
+    const formRequest = isJsonRequest ? null : await parseFormLoginRequest(request);
 
     const credentials = isJsonRequest
       ? await parseJsonCredentials(request)
-      : await parseFormCredentials(request);
+      : formRequest?.email && formRequest.password
+        ? {
+            email: formRequest.email,
+            password: formRequest.password,
+          }
+        : null;
 
     if (!credentials) {
       return isJsonRequest
         ? Response.json({ error: INVALID_CREDENTIALS_MESSAGE }, { status: 400 })
-        : buildLoginErrorRedirect(request);
+        : buildLoginErrorRedirect(request, "invalid_credentials", formRequest?.redirectTo);
     }
 
     const email = credentials.email.toLowerCase().trim();
@@ -98,14 +110,14 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
     if (!user || !user.passwordHash) {
       return isJsonRequest
         ? Response.json({ error: INVALID_CREDENTIALS_MESSAGE }, { status: 401 })
-        : buildLoginErrorRedirect(request);
+        : buildLoginErrorRedirect(request, "invalid_credentials", formRequest?.redirectTo);
     }
 
     const isPasswordValid = await verifyPasswordFn(password, user.passwordHash);
     if (!isPasswordValid) {
       return isJsonRequest
         ? Response.json({ error: INVALID_CREDENTIALS_MESSAGE }, { status: 401 })
-        : buildLoginErrorRedirect(request);
+        : buildLoginErrorRedirect(request, "invalid_credentials", formRequest?.redirectTo);
     }
 
     const membership = user.memberships[0];
@@ -115,7 +127,7 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
             { error: "User has no organization membership. Contact an administrator." },
             { status: 403 },
           )
-        : buildLoginErrorRedirect(request, "no_membership");
+        : buildLoginErrorRedirect(request, "no_membership", formRequest?.redirectTo);
     }
 
     if (user.memberships.length > 1) {
@@ -124,7 +136,7 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
             { error: MULTIPLE_MEMBERSHIPS_MESSAGE },
             { status: 409 },
           )
-        : buildLoginErrorRedirect(request, "multiple_memberships");
+        : buildLoginErrorRedirect(request, "multiple_memberships", formRequest?.redirectTo);
     }
 
     if (!isMembershipRole(membership.role)) {
@@ -133,7 +145,7 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
             { error: "User has an invalid organization role. Contact an administrator." },
             { status: 403 },
           )
-        : buildLoginErrorRedirect(request, "invalid_role");
+        : buildLoginErrorRedirect(request, "invalid_role", formRequest?.redirectTo);
     }
 
     const token = createSessionTokenFn({
@@ -152,7 +164,7 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
           },
           organization: membership.organization,
         })
-      : redirectResponse(new URL("/dashboard", request.url), 303);
+      : redirectResponse(new URL(formRequest?.redirectTo ?? "/dashboard", request.url), 303);
 
     response.headers.append(
       "set-cookie",
@@ -198,22 +210,14 @@ async function parseJsonCredentials(
   }
 }
 
-async function parseFormCredentials(
-  request: Request,
-): Promise<{ email: string; password: string } | null> {
+async function parseFormLoginRequest(request: Request): Promise<ParsedFormLoginRequest | null> {
   try {
     const formData = await request.formData();
-    const email = formData.get("email");
-    const password = formData.get("password");
-    if (typeof email !== "string" || typeof password !== "string") {
-      return null;
-    }
-
-    if (!email.trim() || !password.trim()) {
-      return null;
-    }
-
-    return { email, password };
+    return {
+      email: readFormStringField(formData.get("email")),
+      password: readFormStringField(formData.get("password")),
+      redirectTo: sanitizeLoginRedirectTarget(formData.get("redirect")),
+    };
   } catch {
     return null;
   }
@@ -232,9 +236,46 @@ function readCredentialField(value: unknown, field: "email" | "password"): strin
   return fieldValue;
 }
 
-function buildLoginErrorRedirect(request: Request, error = "invalid_credentials"): Response {
+function readFormStringField(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+
+  return value;
+}
+
+function sanitizeLoginRedirectTarget(value: FormDataEntryValue | null): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("/dashboard") || trimmed.startsWith("//")) {
+    return null;
+  }
+
+  try {
+    const normalizedUrl = new URL(trimmed, "http://localhost");
+    if (normalizedUrl.origin !== "http://localhost") {
+      return null;
+    }
+
+    return `${normalizedUrl.pathname}${normalizedUrl.search}${normalizedUrl.hash}`;
+  } catch {
+    return null;
+  }
+}
+
+function buildLoginErrorRedirect(
+  request: Request,
+  error = "invalid_credentials",
+  redirectTo: string | null = null,
+): Response {
   const redirectUrl = new URL("/login", request.url);
   redirectUrl.searchParams.set("error", error);
+  if (redirectTo) {
+    redirectUrl.searchParams.set("redirect", redirectTo);
+  }
   return redirectResponse(redirectUrl, 303);
 }
 

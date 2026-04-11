@@ -32,6 +32,155 @@ test("postmark webhook rejects unauthorized requests", async () => {
   );
 });
 
+test("postmark webhook fails closed when auth credentials are not configured", async () => {
+  await withEnv(
+    {
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: undefined,
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: undefined,
+    },
+    async () => {
+      const response = await POST(
+        new Request("http://localhost/api/webhooks/postmark/inbound", {
+          method: "POST",
+          body: JSON.stringify({ MessageID: `message-${randomUUID()}` }),
+          headers: {
+            "content-type": "application/json",
+          },
+        }),
+      );
+
+      assert.equal(response.status, 503);
+      assert.deepEqual(await response.json(), { error: "Service unavailable" });
+    },
+  );
+});
+
+test("postmark webhook uses the default org fallback only when explicitly enabled", async () => {
+  const suffix = randomUUID();
+  const providerMessageId = `message-${suffix}`;
+  const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+
+  await withEnv(
+    {
+      NODE_ENV: "test",
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+      POSTMARK_DEFAULT_ORG_SLUG: `webhook-fallback-${suffix}`,
+      POSTMARK_ALLOW_DEFAULT_ORG_FALLBACK: "true",
+    },
+    async () => {
+      const handler = createPostmarkInboundHandler({
+        prismaClient: prisma,
+        maybeEnqueueClaimForProcessingFn: async () => ({
+          enqueued: false,
+          reason: "queue_not_configured",
+        }),
+      });
+
+      const organization = await prisma.organization.create({
+        data: {
+          name: `Webhook Fallback Test ${suffix}`,
+          slug: `webhook-fallback-${suffix}`,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      try {
+        const response = await handler(
+          new Request("http://localhost/api/webhooks/postmark/inbound", {
+            method: "POST",
+            body: JSON.stringify({
+              MessageID: providerMessageId,
+              From: `Customer <customer-${suffix}@example.com>`,
+              To: `claims+${suffix}@example.com`,
+              Subject: "Fallback org routing",
+              TextBody: "No mailbox hash was provided.",
+            }),
+            headers: {
+              authorization: authHeader,
+              "content-type": "application/json",
+            },
+          }),
+        );
+
+        assert.equal(response.status, 200);
+
+        const body = (await response.json()) as Record<string, unknown>;
+        assert.equal(body.organizationId, organization.id);
+        assert.equal(body.claimStatus, "NEW");
+      } finally {
+        await prisma.organization.delete({
+          where: {
+            id: organization.id,
+          },
+        });
+      }
+    },
+  );
+});
+
+test("postmark webhook rejects unresolved orgs when the default fallback is not enabled", async () => {
+  const suffix = randomUUID();
+  const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+
+  await withEnv(
+    {
+      NODE_ENV: "production",
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+      POSTMARK_DEFAULT_ORG_SLUG: `webhook-fallback-disabled-${suffix}`,
+      POSTMARK_ALLOW_DEFAULT_ORG_FALLBACK: undefined,
+    },
+    async () => {
+      const handler = createPostmarkInboundHandler({
+        prismaClient: prisma,
+      });
+
+      const organization = await prisma.organization.create({
+        data: {
+          name: `Webhook Disabled Fallback Test ${suffix}`,
+          slug: `webhook-fallback-disabled-${suffix}`,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      try {
+        const response = await handler(
+          new Request("http://localhost/api/webhooks/postmark/inbound", {
+            method: "POST",
+            body: JSON.stringify({
+              MessageID: `message-${suffix}`,
+              From: `Customer <customer-${suffix}@example.com>`,
+              To: `claims+${suffix}@example.com`,
+              Subject: "Fallback disabled",
+              TextBody: "No mailbox hash was provided.",
+            }),
+            headers: {
+              authorization: authHeader,
+              "content-type": "application/json",
+            },
+          }),
+        );
+
+        assert.equal(response.status, 422);
+        assert.deepEqual(await response.json(), {
+          error: "Unable to resolve organization for inbound message",
+        });
+      } finally {
+        await prisma.organization.delete({
+          where: {
+            id: organization.id,
+          },
+        });
+      }
+    },
+  );
+});
+
 test("postmark webhook returns deduplicated response for existing inbound messages", async () => {
   const suffix = randomUUID();
   const mailboxHash = `mailbox-${suffix}`;

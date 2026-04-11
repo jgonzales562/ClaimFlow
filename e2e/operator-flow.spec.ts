@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
+const seedAdminEmail = process.env.CLAIMFLOW_SEED_ADMIN_EMAIL?.trim() || "admin@claimflow.local";
+const seedAdminPassword = process.env.CLAIMFLOW_SEED_ADMIN_PASSWORD?.trim();
+
 test.describe("admin claim operator flows", () => {
   test.beforeEach(async ({ page }) => {
     await signInAsAdmin(page);
@@ -314,12 +317,16 @@ test.describe("admin claim operator flows", () => {
 });
 
 async function signInAsAdmin(page: Page): Promise<void> {
+  if (!seedAdminPassword) {
+    throw new Error("CLAIMFLOW_SEED_ADMIN_PASSWORD is required for the e2e admin sign-in flow.");
+  }
+
   await page.goto("/login");
 
   await expect(page.getByRole("heading", { name: "Sign in to ClaimFlow" })).toBeVisible();
 
-  await page.getByLabel("Email").fill("admin@claimflow.local");
-  await page.getByLabel("Password").fill("Moonbeem7!");
+  await page.getByLabel("Email").fill(seedAdminEmail);
+  await page.getByLabel("Password").fill(seedAdminPassword);
   await Promise.all([
     page.waitForURL(/\/dashboard(?:\?|$)/),
     page.getByRole("button", { name: "Sign in" }).click(),
