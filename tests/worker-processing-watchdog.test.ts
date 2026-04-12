@@ -179,7 +179,71 @@ test("processing watchdog leaves fresh processing claims alone", async () => {
   }
 });
 
-function buildWorkerConfig(): WorkerConfig {
+test("processing watchdog recovers multiple stale claims with bounded concurrency", async () => {
+  const now = new Date("2026-01-01T13:00:00.000Z");
+  await normalizeAmbientProcessingClaims(now);
+  const firstFixture = await createWatchdogFixture({
+    updatedAt: new Date("2026-01-01T12:00:00.000Z"),
+  });
+  const secondFixture = await createWatchdogFixture({
+    updatedAt: new Date("2026-01-01T11:59:00.000Z"),
+  });
+
+  let activeSends = 0;
+  let maxActiveSends = 0;
+  let releaseSends!: () => void;
+  const releasePromise = new Promise<void>((resolve) => {
+    releaseSends = resolve;
+  });
+  const releaseTimer = setTimeout(releaseSends, 500);
+
+  try {
+    const recoveryPromise = recoverStaleProcessingClaims(
+      {
+        prismaClient: prisma,
+        sqsClient: {
+          send: async () => {
+            activeSends += 1;
+            maxActiveSends = Math.max(maxActiveSends, activeSends);
+            if (activeSends === 2) {
+              clearTimeout(releaseTimer);
+              releaseSends();
+            }
+
+            await releasePromise;
+            activeSends -= 1;
+            return {
+              MessageId: `aws-watchdog-message-${maxActiveSends}`,
+            };
+          },
+        },
+        config: buildWorkerConfig({
+          processingWatchdogBatchSize: 2,
+          processingWatchdogConcurrency: 2,
+        }),
+      },
+      {
+        nowFn: () => now,
+      },
+    );
+
+    const result = await recoveryPromise;
+
+    assert.deepEqual(result, {
+      scannedCount: 2,
+      recoveredCount: 2,
+      skippedCount: 0,
+      failedCount: 0,
+    });
+    assert.equal(maxActiveSends, 2);
+  } finally {
+    clearTimeout(releaseTimer);
+    releaseSends();
+    await Promise.all([firstFixture.cleanup(), secondFixture.cleanup()]);
+  }
+});
+
+function buildWorkerConfig(overrides: Partial<WorkerConfig> = {}): WorkerConfig {
   return {
     awsRegion: "us-west-2",
     queueUrl: "https://example.invalid/claims",
@@ -191,6 +255,7 @@ function buildWorkerConfig(): WorkerConfig {
     processingWatchdogEnabled: true,
     processingWatchdogIntervalMs: 60_000,
     processingWatchdogBatchSize: 25,
+    processingWatchdogConcurrency: 5,
     pollWaitSeconds: 20,
     visibilityTimeoutSeconds: undefined,
     maxMessages: 5,
@@ -211,6 +276,7 @@ function buildWorkerConfig(): WorkerConfig {
     sentryDsn: null,
     sentryEnvironment: "test",
     sentryTracesSampleRate: 0.1,
+    ...overrides,
   };
 }
 

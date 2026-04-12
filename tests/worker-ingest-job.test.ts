@@ -435,6 +435,7 @@ test("worker ingest job uses the textract pass when it produces a better extract
     textractFallbackEnabled: true,
   };
   const extractionCalls: Array<{ supplementalText: string | null }> = [];
+  let attachmentLoadCalls = 0;
   const textractCalls: Array<{ attachmentCount: number; region: string }> = [];
   const persistedInputs: PersistClaimExtractionOutcomeInput[] = [];
   const primaryExtraction = buildExtractionResult({
@@ -471,6 +472,18 @@ test("worker ingest job uses the textract pass when it produces a better extract
           extractionCalls.push({ supplementalText: input.supplementalText });
           return extractionCalls.length === 1 ? primaryExtraction : secondaryExtraction;
         },
+        loadStoredAttachmentsFn: async () => {
+          attachmentLoadCalls += 1;
+          return [
+            {
+              id: "attachment-1",
+              originalFilename: "receipt.pdf",
+              contentType: "application/pdf",
+              s3Bucket: "test-bucket",
+              s3Key: "claims/receipt.pdf",
+            },
+          ];
+        },
         extractAttachmentTextWithTextractFn: async (input) => {
           textractCalls.push({
             attachmentCount: input.attachments.length,
@@ -494,6 +507,7 @@ test("worker ingest job uses the textract pass when it produces a better extract
       { supplementalText: null },
       { supplementalText: "attachment derived text" },
     ]);
+    assert.equal(attachmentLoadCalls, 1);
     assert.deepEqual(textractCalls, [{ attachmentCount: 1, region: "us-west-2" }]);
     assert.equal(persistedInputs.length, 1);
     assert.equal(persistedInputs[0]?.shouldAttemptTextract, true);
@@ -527,6 +541,7 @@ test("worker ingest job skips textract when fallback thresholds are not met", as
     ...TEST_CONFIG,
     textractFallbackEnabled: true,
   };
+  let attachmentLoadCalls = 0;
   let textractCalled = false;
   const persistedInputs: PersistClaimExtractionOutcomeInput[] = [];
   const primaryExtraction = buildExtractionResult({
@@ -551,6 +566,18 @@ test("worker ingest job skips textract when fallback thresholds are not met", as
       buildQueueMessage({ organizationId, claimId, inboundMessageId, providerMessageId }),
       {
         extractClaimDataFn: async () => primaryExtraction,
+        loadStoredAttachmentsFn: async () => {
+          attachmentLoadCalls += 1;
+          return [
+            {
+              id: "attachment-1",
+              originalFilename: "receipt.pdf",
+              contentType: "application/pdf",
+              s3Bucket: "test-bucket",
+              s3Key: "claims/receipt.pdf",
+            },
+          ];
+        },
         extractAttachmentTextWithTextractFn: async () => {
           textractCalled = true;
           throw new Error("textract should not run when thresholds are not met");
@@ -562,6 +589,7 @@ test("worker ingest job skips textract when fallback thresholds are not met", as
       },
     );
 
+    assert.equal(attachmentLoadCalls, 0);
     assert.equal(textractCalled, false);
     assert.equal(persistedInputs.length, 1);
     assert.equal(persistedInputs[0]?.shouldAttemptTextract, false);
@@ -571,11 +599,76 @@ test("worker ingest job skips textract when fallback thresholds are not met", as
     assert.deepEqual(persistedInputs[0]?.textractMetadata, {
       attempted: false,
       reason: "quality_threshold_not_met",
-      attachmentsAvailable: 1,
       inboundTextChars:
         "Worker ingest job inbound".length +
         "This inbound body is intentionally long enough to stay above the textract fallback minimum character threshold for the worker path."
           .length,
+    });
+  } finally {
+    await cleanup();
+  }
+});
+
+test("worker ingest job records no_stored_attachments when fallback is warranted but no attachments exist", async () => {
+  const {
+    organizationId,
+    claimId,
+    inboundMessageId,
+    providerMessageId,
+    cleanup,
+  } = await createClaimFixture("PROCESSING", {
+    textBody: "short inbound body",
+  });
+  const textractConfig: ClaimIngestJobConfig = {
+    ...TEST_CONFIG,
+    textractFallbackEnabled: true,
+  };
+  let attachmentLoadCalls = 0;
+  let textractCalled = false;
+  const persistedInputs: PersistClaimExtractionOutcomeInput[] = [];
+  const primaryExtraction = buildExtractionResult({
+    provider: "OPENAI",
+    extraction: {
+      confidence: 0.41,
+      issueSummary: "Primary extraction without attachments",
+      missingInfo: ["serial_number", "purchase_date", "retailer"],
+    },
+    rawOutput: { stage: "primary-no-attachments" },
+  });
+
+  try {
+    await processClaimIngestJob(
+      prisma,
+      textractConfig,
+      buildQueueMessage({ organizationId, claimId, inboundMessageId, providerMessageId }),
+      {
+        extractClaimDataFn: async () => primaryExtraction,
+        loadStoredAttachmentsFn: async () => {
+          attachmentLoadCalls += 1;
+          return [];
+        },
+        extractAttachmentTextWithTextractFn: async () => {
+          textractCalled = true;
+          throw new Error("textract should not run without stored attachments");
+        },
+        persistClaimExtractionOutcomeFn: async (_prismaClient, input) => {
+          persistedInputs.push(input);
+          return "REVIEW_REQUIRED";
+        },
+      },
+    );
+
+    assert.equal(attachmentLoadCalls, 1);
+    assert.equal(textractCalled, false);
+    assert.equal(persistedInputs.length, 1);
+    assert.equal(persistedInputs[0]?.shouldAttemptTextract, false);
+    assert.equal(persistedInputs[0]?.usedTextractPass, false);
+    assert.equal(persistedInputs[0]?.selectedExtraction, primaryExtraction);
+    assert.deepEqual(persistedInputs[0]?.textractMetadata, {
+      attempted: false,
+      reason: "no_stored_attachments",
+      attachmentsAvailable: 0,
+      inboundTextChars: "Worker ingest job inbound".length + "short inbound body".length,
     });
   } finally {
     await cleanup();
@@ -596,6 +689,7 @@ test("worker ingest job keeps the primary extraction when the textract pass is l
     ...TEST_CONFIG,
     textractFallbackEnabled: true,
   };
+  let attachmentLoadCalls = 0;
   const persistedInputs: PersistClaimExtractionOutcomeInput[] = [];
   const primaryExtraction = buildExtractionResult({
     provider: "OPENAI",
@@ -632,6 +726,18 @@ test("worker ingest job keeps the primary extraction when the textract pass is l
           extractionCalls += 1;
           return extractionCalls === 1 ? primaryExtraction : secondaryExtraction;
         },
+        loadStoredAttachmentsFn: async () => {
+          attachmentLoadCalls += 1;
+          return [
+            {
+              id: "attachment-1",
+              originalFilename: "receipt.pdf",
+              contentType: "application/pdf",
+              s3Bucket: "test-bucket",
+              s3Key: "claims/receipt.pdf",
+            },
+          ];
+        },
         extractAttachmentTextWithTextractFn: async () => ({
           attempted: true,
           provider: "aws_textract",
@@ -646,6 +752,7 @@ test("worker ingest job keeps the primary extraction when the textract pass is l
     );
 
     assert.equal(extractionCalls, 2);
+    assert.equal(attachmentLoadCalls, 1);
     assert.equal(persistedInputs.length, 1);
     assert.equal(persistedInputs[0]?.selectedExtraction, primaryExtraction);
     assert.equal(persistedInputs[0]?.usedTextractPass, false);
@@ -670,6 +777,7 @@ test("worker ingest job logs textract re-extraction failures and keeps the prima
     ...TEST_CONFIG,
     textractFallbackEnabled: true,
   };
+  let attachmentLoadCalls = 0;
   const persistedInputs: PersistClaimExtractionOutcomeInput[] = [];
   const loggedErrors: Array<{ event: string; context: Record<string, unknown> }> = [];
   const primaryExtraction = buildExtractionResult({
@@ -699,6 +807,18 @@ test("worker ingest job logs textract re-extraction failures and keeps the prima
 
           throw new Error("secondary extraction failed");
         },
+        loadStoredAttachmentsFn: async () => {
+          attachmentLoadCalls += 1;
+          return [
+            {
+              id: "attachment-1",
+              originalFilename: "receipt.pdf",
+              contentType: "application/pdf",
+              s3Bucket: "test-bucket",
+              s3Key: "claims/receipt.pdf",
+            },
+          ];
+        },
         extractAttachmentTextWithTextractFn: async () => ({
           attempted: true,
           provider: "aws_textract",
@@ -716,6 +836,7 @@ test("worker ingest job logs textract re-extraction failures and keeps the prima
     );
 
     assert.equal(extractionCalls, 2);
+    assert.equal(attachmentLoadCalls, 1);
     assert.equal(persistedInputs.length, 1);
     assert.equal(persistedInputs[0]?.selectedExtraction, primaryExtraction);
     assert.equal(persistedInputs[0]?.usedTextractPass, false);

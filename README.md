@@ -84,11 +84,13 @@ If `CLAIMFLOW_SEED_ADMIN_PASSWORD` is blank, `pnpm db:seed` prints a generated a
 pnpm --filter @claimflow/web dev
 ```
 
-6. Start the worker in a separate shell with env loaded:
+6. Start the worker in a separate shell:
 
 ```bash
-bash -lc 'set -a && source .env && set +a && pnpm --filter @claimflow/worker dev'
+pnpm --filter @claimflow/worker dev
 ```
+
+The web and worker package scripts automatically load the repo-root `.env` when present.
 
 ## Common Commands
 
@@ -127,6 +129,7 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 - `CLAIMS_PROCESSING_WATCHDOG_ENABLED`
 - `CLAIMS_PROCESSING_WATCHDOG_INTERVAL_MS`
 - `CLAIMS_PROCESSING_WATCHDOG_BATCH_SIZE`
+- `CLAIMS_PROCESSING_WATCHDOG_CONCURRENCY`
 - `OPENAI_API_KEY`
 - `SENTRY_DSN`
 - `CLAIMS_HEALTH_BEARER_TOKEN`

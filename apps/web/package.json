@@ -5,9 +5,9 @@
   "scripts": {
     "predev": "node ../../scripts/ensure-db-build.mjs",
     "prebuild": "node ../../scripts/ensure-db-build.mjs",
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start",
+    "dev": "node ../../scripts/run-with-root-env.mjs next dev",
+    "build": "node ../../scripts/run-with-root-env.mjs next build",
+    "start": "node ../../scripts/run-with-root-env.mjs next start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "next typegen && tsc -p tsconfig.json --noEmit --incremental false"
   },

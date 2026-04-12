@@ -427,8 +427,9 @@ async function persistAttachments(input: {
   const results = await mapWithConcurrency(
     input.attachments,
     ATTACHMENT_PERSIST_CONCURRENCY,
-    async (attachment) =>
-      persistSingleAttachment({
+    async (attachment, index) =>
+      prepareAttachmentPersistence({
+        index,
         organizationId: input.organizationId,
         claimId: input.claimId,
         inboundMessageId: input.inboundMessageId,
@@ -437,15 +438,18 @@ async function persistAttachments(input: {
       }, dependencies),
   );
 
-  let stored = 0;
-  const errors: Array<{ filename: string; message: string }> = [];
-  for (const result of results) {
-    if (result.stored) {
-      stored += 1;
-      continue;
-    }
-    errors.push(result.error);
-  }
+  const storedRows = results.filter(
+    (result): result is PreparedStoredAttachmentPersistence => result.kind === "stored",
+  );
+  const failedRows = results.filter(
+    (result): result is PreparedFailedAttachmentPersistence => result.kind === "failed",
+  );
+  await persistFailedAttachmentRows(failedRows, dependencies.prismaClient);
+  const storedWriteFailures = await persistStoredAttachmentRows(storedRows, dependencies.prismaClient);
+  const errors = [...failedRows, ...storedWriteFailures]
+    .sort((left, right) => left.index - right.index)
+    .map((result) => result.error);
+  const stored = storedRows.length - storedWriteFailures.length;
 
   return {
     received: input.attachments.length,
@@ -455,17 +459,33 @@ async function persistAttachments(input: {
   };
 }
 
-async function persistSingleAttachment(input: {
+type PreparedStoredAttachmentPersistence = {
+  kind: "stored";
+  index: number;
+  row: Prisma.ClaimAttachmentCreateManyInput;
+};
+
+type PreparedFailedAttachmentPersistence = {
+  kind: "failed";
+  index: number;
+  row: Prisma.ClaimAttachmentCreateManyInput;
+  error: {
+    filename: string;
+    message: string;
+  };
+};
+
+async function prepareAttachmentPersistence(input: {
+  index: number;
   organizationId: string;
   claimId: string;
   inboundMessageId: string;
   providerMessageId: string;
   attachment: NormalizedPostmarkAttachment;
 }, dependencies: {
-  prismaClient: typeof prisma;
   putAttachmentObjectFn: typeof putAttachmentObject;
 }): Promise<
-  { stored: true } | { stored: false; error: { filename: string; message: string } }
+  PreparedStoredAttachmentPersistence | PreparedFailedAttachmentPersistence
 > {
   const attachment = input.attachment;
   const attachmentId = randomUUID();
@@ -474,8 +494,10 @@ async function persistSingleAttachment(input: {
 
   if (!fileBuffer) {
     const message = "Attachment content is not valid base64.";
-    await createFailedAttachmentRecord(
-      {
+    return {
+      kind: "failed",
+      index: input.index,
+      row: buildFailedAttachmentRecordData({
         organizationId: input.organizationId,
         claimId: input.claimId,
         inboundMessageId: input.inboundMessageId,
@@ -483,11 +505,7 @@ async function persistSingleAttachment(input: {
         contentType: attachment.contentType,
         byteSize: attachment.byteSize,
         errorMessage: message,
-      },
-      dependencies.prismaClient,
-    );
-    return {
-      stored: false,
+      }),
       error: {
         filename: attachment.originalFilename,
         message,
@@ -519,8 +537,10 @@ async function persistSingleAttachment(input: {
       },
     });
 
-    await dependencies.prismaClient.claimAttachment.create({
-      data: {
+    return {
+      kind: "stored",
+      index: input.index,
+      row: {
         organizationId: input.organizationId,
         claimId: input.claimId,
         inboundMessageId: input.inboundMessageId,
@@ -532,13 +552,13 @@ async function persistSingleAttachment(input: {
         s3Bucket: storedObject.bucket,
         s3Key: storedObject.key,
       },
-    });
-
-    return { stored: true };
+    };
   } catch (error: unknown) {
     const message = extractErrorMessage(error, "Unknown upload error.");
-    await createFailedAttachmentRecord(
-      {
+    return {
+      kind: "failed",
+      index: input.index,
+      row: buildFailedAttachmentRecordData({
         organizationId: input.organizationId,
         claimId: input.claimId,
         inboundMessageId: input.inboundMessageId,
@@ -546,17 +566,91 @@ async function persistSingleAttachment(input: {
         contentType: attachment.contentType,
         byteSize: fileBuffer.length,
         errorMessage: message,
-      },
-      dependencies.prismaClient,
-    );
-
-    return {
-      stored: false,
+      }),
       error: {
         filename: attachment.originalFilename,
         message,
       },
     };
+  }
+}
+
+async function persistFailedAttachmentRows(
+  rows: PreparedFailedAttachmentPersistence[],
+  prismaClient: typeof prisma,
+): Promise<void> {
+  if (rows.length === 0) {
+    return;
+  }
+
+  try {
+    await prismaClient.claimAttachment.createMany({
+      data: rows.map((row) => row.row),
+    });
+  } catch {
+    await Promise.all(
+      rows.map((row) =>
+        prismaClient.claimAttachment.create({
+          data: row.row,
+        }),
+      ),
+    );
+  }
+}
+
+async function persistStoredAttachmentRows(
+  rows: PreparedStoredAttachmentPersistence[],
+  prismaClient: typeof prisma,
+): Promise<PreparedFailedAttachmentPersistence[]> {
+  if (rows.length === 0) {
+    return [];
+  }
+
+  try {
+    await prismaClient.claimAttachment.createMany({
+      data: rows.map((row) => row.row),
+    });
+    return [];
+  } catch {
+    const failedRows = await Promise.all(
+      rows.map(async (row) => {
+        try {
+          await prismaClient.claimAttachment.create({
+            data: row.row,
+          });
+          return null;
+        } catch (error: unknown) {
+          const message = extractErrorMessage(error, "Unknown upload error.");
+          const failedRow = buildFailedAttachmentRecordData({
+            organizationId: row.row.organizationId,
+            claimId: row.row.claimId,
+            inboundMessageId: row.row.inboundMessageId ?? null,
+            originalFilename: row.row.originalFilename,
+            contentType: row.row.contentType ?? null,
+            byteSize: row.row.byteSize,
+            errorMessage: message,
+          });
+
+          await prismaClient.claimAttachment.create({
+            data: failedRow,
+          });
+
+          return {
+            kind: "failed",
+            index: row.index,
+            row: failedRow,
+            error: {
+              filename: row.row.originalFilename,
+              message,
+            },
+          } satisfies PreparedFailedAttachmentPersistence;
+        }
+      }),
+    );
+
+    return failedRows.filter(
+      (row): row is PreparedFailedAttachmentPersistence => row !== null,
+    );
   }
 }
 
@@ -589,29 +683,27 @@ async function mapWithConcurrency<TInput, TResult>(
   return results;
 }
 
-async function createFailedAttachmentRecord(input: {
+function buildFailedAttachmentRecordData(input: {
   organizationId: string;
   claimId: string;
-  inboundMessageId: string;
+  inboundMessageId: string | null;
   originalFilename: string;
   contentType: string | null;
   byteSize: number;
   errorMessage: string;
-}, prismaClient: typeof prisma) {
-  await prismaClient.claimAttachment.create({
-    data: {
-      organizationId: input.organizationId,
-      claimId: input.claimId,
-      inboundMessageId: input.inboundMessageId,
-      uploadStatus: "FAILED",
-      originalFilename: input.originalFilename,
-      contentType: input.contentType,
-      byteSize: input.byteSize,
-      s3Bucket: "unavailable",
-      s3Key: "unavailable",
-      errorMessage: input.errorMessage.slice(0, 2048),
-    },
-  });
+}): Prisma.ClaimAttachmentCreateManyInput {
+  return {
+    organizationId: input.organizationId,
+    claimId: input.claimId,
+    inboundMessageId: input.inboundMessageId,
+    uploadStatus: "FAILED",
+    originalFilename: input.originalFilename,
+    contentType: input.contentType,
+    byteSize: input.byteSize,
+    s3Bucket: "unavailable",
+    s3Key: "unavailable",
+    errorMessage: input.errorMessage.slice(0, 2048),
+  };
 }
 
 function buildAttachmentS3Key(input: {

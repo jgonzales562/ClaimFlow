@@ -216,11 +216,21 @@ test("claims export streams JSON results across batches without materializing th
 
 test("claims export defaults to CSV and streams the response body", async () => {
   const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
+  const fetchCalls: Array<{ cursor: unknown; take: number }> = [];
   const handler = createClaimsExportHandler({
     getAuthContextFn: async () => AUTH,
-    buildCsvStreamFn: ({ limit }) =>
+    fetchClaimExportBatchFn: async (input) => {
+      fetchCalls.push({
+        cursor: input.cursor,
+        take: input.take,
+      });
+      return [];
+    },
+    buildCsvStreamFn: ({ limit, initialBatch, onComplete }) =>
       new ReadableStream<Uint8Array>({
         start(controller) {
+          assert.deepEqual(initialBatch, []);
+          onComplete?.(1);
           controller.enqueue(new TextEncoder().encode(`header-${limit}\nrow-1\n`));
           controller.close();
         },
@@ -240,7 +250,40 @@ test("claims export defaults to CSV and streams the response body", async () => 
   );
   assert.equal(response.headers.get("content-type"), "text/csv; charset=utf-8");
   assert.equal(await response.text(), "header-25\nrow-1\n");
+  assert.deepEqual(fetchCalls, [{ cursor: null, take: 25 }]);
   assert.deepEqual(loggedInfo.map((entry) => entry.event), ["claims_export_completed"]);
+  assert.equal(loggedInfo[0]?.context.count, 1);
+});
+
+test("claims export logs CSV stream failures after the response is created", async () => {
+  const capturedErrors: Array<{ error: unknown; context: Record<string, unknown> }> = [];
+  const loggedErrors: Array<{ event: string; context: Record<string, unknown> }> = [];
+  const handler = createClaimsExportHandler({
+    getAuthContextFn: async () => AUTH,
+    fetchClaimExportBatchFn: async () => [],
+    buildCsvStreamFn: ({ onError }) =>
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          const error = new Error("simulated csv stream failure");
+          onError?.(error);
+          controller.error(error);
+        },
+      }),
+    captureWebExceptionFn: (error, context) => {
+      capturedErrors.push({ error, context });
+    },
+    logErrorFn: (event, context) => {
+      loggedErrors.push({ event, context });
+    },
+  });
+
+  const response = await handler(new Request("http://localhost/api/claims/export"));
+
+  await assert.rejects(() => response.text(), /simulated csv stream failure/);
+  assert.equal(capturedErrors.length, 1);
+  assert.equal(loggedErrors.length, 1);
+  assert.equal(loggedErrors[0]?.event, "claims_export_stream_failed");
+  assert.equal(loggedErrors[0]?.context.error, "simulated csv stream failure");
 });
 
 test("claims export returns 500 when export generation fails", async () => {

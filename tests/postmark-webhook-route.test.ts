@@ -566,6 +566,165 @@ test("postmark webhook rejects malformed attachment base64 and records the attac
   );
 });
 
+test("postmark webhook persists mixed attachment outcomes in one request", async () => {
+  const suffix = randomUUID();
+  const mailboxHash = `mailbox-${suffix}`;
+  const providerMessageId = `message-${suffix}`;
+  const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+  const storedObjects: Array<{ key: string; body: string }> = [];
+
+  await withEnv(
+    {
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+    },
+    async () => {
+      const handler = createPostmarkInboundHandler({
+        prismaClient: prisma,
+        maybeEnqueueClaimForProcessingFn: async () => ({
+          enqueued: false,
+          reason: "queue_not_configured",
+        }),
+        putAttachmentObjectFn: async (input) => {
+          storedObjects.push({
+            key: input.key,
+            body: Buffer.from(input.body).toString("utf8"),
+          });
+          return {
+            bucket: "test-bucket",
+            key: `test-prefix/${input.key}`,
+          };
+        },
+      });
+
+      const organization = await prisma.organization.create({
+        data: {
+          name: `Webhook Mixed Attachment Test ${suffix}`,
+          slug: `webhook-mixed-attachment-test-${suffix}`,
+          integrationMailbox: {
+            create: {
+              provider: "POSTMARK",
+              mailboxHash,
+              emailAddress: `claims+${suffix}@example.com`,
+            },
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      try {
+        const response = await handler(
+          new Request("http://localhost/api/webhooks/postmark/inbound", {
+            method: "POST",
+            body: JSON.stringify({
+              MessageID: providerMessageId,
+              MailboxHash: mailboxHash,
+              From: `Customer <customer-${suffix}@example.com>`,
+              To: `claims+${suffix}@example.com`,
+              Subject: "Mixed attachment payload",
+              TextBody: "Three attachments included.",
+              Attachments: [
+                {
+                  Name: "receipt.pdf",
+                  Content: Buffer.from("hello").toString("base64"),
+                  ContentType: "application/pdf",
+                  ContentLength: 5,
+                },
+                {
+                  Name: "broken.txt",
+                  Content: "not-base64",
+                  ContentType: "text/plain",
+                  ContentLength: 10,
+                },
+                {
+                  Name: "serial.txt",
+                  Content: Buffer.from("serial-123").toString("base64"),
+                  ContentType: "text/plain",
+                  ContentLength: 10,
+                },
+              ],
+            }),
+            headers: {
+              authorization: authHeader,
+              "content-type": "application/json",
+            },
+          }),
+        );
+
+        assert.equal(response.status, 200);
+        const body = (await response.json()) as Record<string, unknown>;
+        assert.deepEqual(body.attachments, {
+          received: 3,
+          stored: 2,
+          failed: 1,
+          errors: [
+            {
+              filename: "broken.txt",
+              message: "Attachment content is not valid base64.",
+            },
+          ],
+        });
+
+        assert.equal(storedObjects.length, 2);
+        assert.deepEqual(
+          storedObjects.map((object) => object.body).sort(),
+          ["hello", "serial-123"],
+        );
+
+        const attachments = await prisma.claimAttachment.findMany({
+          where: {
+            organizationId: organization.id,
+          },
+          orderBy: [{ originalFilename: "asc" }],
+          select: {
+            uploadStatus: true,
+            originalFilename: true,
+            byteSize: true,
+            errorMessage: true,
+          },
+        });
+
+        assert.deepEqual(
+          attachments.map((attachment) => ({
+            uploadStatus: attachment.uploadStatus,
+            originalFilename: attachment.originalFilename,
+            byteSize: attachment.byteSize,
+            errorMessage: attachment.errorMessage,
+          })),
+          [
+            {
+              uploadStatus: "FAILED",
+              originalFilename: "broken.txt",
+              byteSize: 10,
+              errorMessage: "Attachment content is not valid base64.",
+            },
+            {
+              uploadStatus: "STORED",
+              originalFilename: "receipt.pdf",
+              byteSize: 5,
+              errorMessage: null,
+            },
+            {
+              uploadStatus: "STORED",
+              originalFilename: "serial.txt",
+              byteSize: 10,
+              errorMessage: null,
+            },
+          ],
+        );
+      } finally {
+        await prisma.organization.delete({
+          where: {
+            id: organization.id,
+          },
+        });
+      }
+    },
+  );
+});
+
 test("postmark webhook returns 500 when enqueueing fails after persistence", async () => {
   const suffix = randomUUID();
   const mailboxHash = `mailbox-${suffix}`;

@@ -25,6 +25,21 @@ export type ClaimIngestJobConfig = {
 type ClaimIngestJobDependencies = {
   extractClaimDataFn?: typeof extractClaimData;
   extractAttachmentTextWithTextractFn?: typeof extractAttachmentTextWithTextract;
+  loadStoredAttachmentsFn?: (
+    prismaClient: PrismaClient,
+    input: {
+      claimId: string;
+      limit: number;
+    },
+  ) => Promise<
+    Array<{
+      id: string;
+      originalFilename: string;
+      contentType: string | null;
+      s3Bucket: string;
+      s3Key: string;
+    }>
+  >;
   persistClaimExtractionOutcomeFn?: (
     prismaClient: PrismaClient,
     input: PersistClaimExtractionOutcomeInput,
@@ -42,6 +57,24 @@ export async function processClaimIngestJob(
   const extractClaimDataFn = dependencies.extractClaimDataFn ?? extractClaimData;
   const extractAttachmentTextWithTextractFn =
     dependencies.extractAttachmentTextWithTextractFn ?? extractAttachmentTextWithTextract;
+  const loadStoredAttachmentsFn =
+    dependencies.loadStoredAttachmentsFn ??
+    ((dbClient, input) =>
+      dbClient.claimAttachment.findMany({
+        where: {
+          claimId: input.claimId,
+          uploadStatus: "STORED",
+        },
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+        take: input.limit,
+        select: {
+          id: true,
+          originalFilename: true,
+          contentType: true,
+          s3Bucket: true,
+          s3Key: true,
+        },
+      }));
   const persistClaimExtractionOutcomeFn =
     dependencies.persistClaimExtractionOutcomeFn ?? persistClaimExtractionOutcome;
   const logInfoFn = dependencies.logInfoFn ?? (() => {});
@@ -70,20 +103,6 @@ export async function processClaimIngestJob(
           purchaseDate: true,
           issueSummary: true,
           retailer: true,
-          attachments: {
-            where: {
-              uploadStatus: "STORED",
-            },
-            orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-            take: config.textractMaxAttachments,
-            select: {
-              id: true,
-              originalFilename: true,
-              contentType: true,
-              s3Bucket: true,
-              s3Key: true,
-            },
-          },
         },
       },
     },
@@ -213,53 +232,63 @@ export async function processClaimIngestJob(
 
   const inboundTextChars = getInboundTextCharCount(inboundMessage);
 
-  const storedAttachments = claim.attachments;
-
   let textractMetadata: Prisma.InputJsonValue = {
     attempted: false,
     reason: "not_triggered",
   };
   let secondaryExtractionResult: ClaimExtractionResult | null = null;
 
-  const shouldAttemptTextract =
-    storedAttachments.length > 0 &&
-    shouldRunTextractFallback({
-      confidence: primaryExtractionResult.extraction.confidence,
-      missingInfoCount: primaryExtractionResult.extraction.missingInfo.length,
-      inboundTextChars,
-      config,
+  const shouldCheckTextractAttachments = shouldRunTextractFallback({
+    confidence: primaryExtractionResult.extraction.confidence,
+    missingInfoCount: primaryExtractionResult.extraction.missingInfo.length,
+    inboundTextChars,
+    config,
+  });
+  let shouldAttemptTextract = false;
+
+  if (shouldCheckTextractAttachments) {
+    const storedAttachments = await loadStoredAttachmentsFn(prismaClient, {
+      claimId: claim.id,
+      limit: config.textractMaxAttachments,
     });
 
-  if (shouldAttemptTextract) {
-    const textractResult = await extractAttachmentTextWithTextractFn({
-      region: config.awsRegion,
-      attachments: storedAttachments,
-      config: {
-        enabled: config.textractFallbackEnabled,
-        maxAttachments: config.textractMaxAttachments,
-        maxTextChars: config.textractMaxTextChars,
-      },
-    });
+    if (storedAttachments.length > 0) {
+      shouldAttemptTextract = true;
+      const textractResult = await extractAttachmentTextWithTextractFn({
+        region: config.awsRegion,
+        attachments: storedAttachments,
+        config: {
+          enabled: config.textractFallbackEnabled,
+          maxAttachments: config.textractMaxAttachments,
+          maxTextChars: config.textractMaxTextChars,
+        },
+      });
 
-    textractMetadata = textractResult as Prisma.InputJsonValue;
+      textractMetadata = textractResult as Prisma.InputJsonValue;
 
-    if (textractResult.text) {
-      try {
-        secondaryExtractionResult = await runExtraction(textractResult.text);
-      } catch (error: unknown) {
-        logErrorFn("textract_reextraction_failed", {
-          claimId: claim.id,
-          inboundMessageId: inboundMessage.id,
-          error: extractErrorMessage(error),
-        });
+      if (textractResult.text) {
+        try {
+          secondaryExtractionResult = await runExtraction(textractResult.text);
+        } catch (error: unknown) {
+          logErrorFn("textract_reextraction_failed", {
+            claimId: claim.id,
+            inboundMessageId: inboundMessage.id,
+            error: extractErrorMessage(error),
+          });
+        }
       }
+    } else {
+      textractMetadata = {
+        attempted: false,
+        reason: "no_stored_attachments",
+        attachmentsAvailable: 0,
+        inboundTextChars,
+      } as Prisma.InputJsonValue;
     }
   } else {
     textractMetadata = {
       attempted: false,
-      reason:
-        storedAttachments.length === 0 ? "no_stored_attachments" : "quality_threshold_not_met",
-      attachmentsAvailable: storedAttachments.length,
+      reason: "quality_threshold_not_met",
       inboundTextChars,
     } as Prisma.InputJsonValue;
   }

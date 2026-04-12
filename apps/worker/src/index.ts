@@ -88,6 +88,7 @@ async function runWorkerLoop(config: WorkerConfig, sqsClient: SQSClient): Promis
     processingWatchdogEnabled: config.processingWatchdogEnabled,
     processingWatchdogIntervalMs: config.processingWatchdogIntervalMs,
     processingWatchdogBatchSize: config.processingWatchdogBatchSize,
+    processingWatchdogConcurrency: config.processingWatchdogConcurrency,
     pollWaitSeconds: config.pollWaitSeconds,
     maxMessages: config.maxMessages,
     processingConcurrency: config.processingConcurrency,

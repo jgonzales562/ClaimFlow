@@ -296,6 +296,129 @@ test("claim ingest queue outbox dispatch drains multiple batches up to the confi
   assert.deepEqual(dispatchedIds.sort(), ["outbox-a", "outbox-b", "outbox-c", "outbox-d"]);
 });
 
+test("claim ingest queue outbox dispatches pending rows through the default DB-backed path", async () => {
+  const fixture = await createOutboxFixture("dispatch-default");
+  const now = new Date("2026-03-12T18:00:00.000Z");
+  const sentMessages: Array<{
+    queueUrl: string;
+    claimId: string;
+    delaySeconds: number | undefined;
+  }> = [];
+
+  try {
+    const firstOutboxId = await createOutboxRow({
+      organizationId: fixture.organizationId,
+      claimId: fixture.claimId,
+      createdAt: new Date("2026-03-12T17:00:00.000Z"),
+      availableAt: new Date("2026-03-12T17:10:00.000Z"),
+    });
+    const secondOutboxId = await createOutboxRow({
+      organizationId: fixture.organizationId,
+      claimId: fixture.claimId,
+      createdAt: new Date("2026-03-12T17:30:00.000Z"),
+      availableAt: new Date("2026-03-12T18:05:00.000Z"),
+    });
+
+    const result = await dispatchPendingClaimIngestQueueOutbox(
+      {
+        prismaClient: prisma,
+        sendMessageFn: async (input) => {
+          sentMessages.push({
+            queueUrl: input.queueUrl,
+            claimId: input.message.claimId,
+            delaySeconds: input.delaySeconds,
+          });
+          return {
+            ok: true,
+            sqsMessageId: `sqs-${input.message.claimId}-${sentMessages.length}`,
+          };
+        },
+        batchSize: 10,
+        concurrency: 1,
+        maxBatches: 1,
+      },
+      {
+        nowFn: () => now,
+      },
+    );
+
+    assert.deepEqual(result, {
+      selectedCount: 2,
+      dispatchedCount: 2,
+      skippedCount: 0,
+      failedCount: 0,
+    });
+    assert.deepEqual(sentMessages, [
+      {
+        queueUrl: "https://example.invalid/claims",
+        claimId: fixture.claimId,
+        delaySeconds: undefined,
+      },
+      {
+        queueUrl: "https://example.invalid/claims",
+        claimId: fixture.claimId,
+        delaySeconds: 300,
+      },
+    ]);
+
+    const dispatchedRows = await prisma.claimIngestQueueOutbox.findMany({
+      where: {
+        id: {
+          in: [firstOutboxId, secondOutboxId],
+        },
+      },
+      orderBy: [{ createdAt: "asc" }],
+      select: {
+        id: true,
+        dispatchedAt: true,
+        sqsMessageId: true,
+        dispatchAttempts: true,
+        lastDispatchAttemptAt: true,
+        lastDispatchError: true,
+        dispatchLeaseToken: true,
+        dispatchLeaseClaimedAt: true,
+      },
+    });
+
+    assert.deepEqual(
+      dispatchedRows.map((row) => ({
+        id: row.id,
+        dispatchedAt: row.dispatchedAt?.toISOString(),
+        sqsMessageId: row.sqsMessageId,
+        dispatchAttempts: row.dispatchAttempts,
+        lastDispatchAttemptAt: row.lastDispatchAttemptAt?.toISOString(),
+        lastDispatchError: row.lastDispatchError,
+        dispatchLeaseToken: row.dispatchLeaseToken,
+        dispatchLeaseClaimedAt: row.dispatchLeaseClaimedAt,
+      })),
+      [
+        {
+          id: firstOutboxId,
+          dispatchedAt: now.toISOString(),
+          sqsMessageId: `sqs-${fixture.claimId}-1`,
+          dispatchAttempts: 1,
+          lastDispatchAttemptAt: now.toISOString(),
+          lastDispatchError: null,
+          dispatchLeaseToken: null,
+          dispatchLeaseClaimedAt: null,
+        },
+        {
+          id: secondOutboxId,
+          dispatchedAt: now.toISOString(),
+          sqsMessageId: `sqs-${fixture.claimId}-2`,
+          dispatchAttempts: 1,
+          lastDispatchAttemptAt: now.toISOString(),
+          lastDispatchError: null,
+          dispatchLeaseToken: null,
+          dispatchLeaseClaimedAt: null,
+        },
+      ],
+    );
+  } finally {
+    await fixture.cleanup();
+  }
+});
+
 async function createOutboxFixture(label: string) {
   const suffix = randomUUID();
   const organization = await prisma.organization.create({

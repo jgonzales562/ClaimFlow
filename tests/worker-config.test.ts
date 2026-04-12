@@ -10,6 +10,7 @@ test("worker config reads outbox dispatch tuning settings from env", () => {
       CLAIMS_INGEST_OUTBOX_DISPATCH_BATCH_SIZE: "40",
       CLAIMS_INGEST_OUTBOX_DISPATCH_CONCURRENCY: "7",
       CLAIMS_INGEST_OUTBOX_DISPATCH_MAX_BATCHES_PER_RUN: "9",
+      CLAIMS_PROCESSING_WATCHDOG_CONCURRENCY: "6",
     },
     () => {
       const config = loadWorkerConfig();
@@ -17,6 +18,7 @@ test("worker config reads outbox dispatch tuning settings from env", () => {
       assert.equal(config.ingestQueueOutboxDispatchBatchSize, 40);
       assert.equal(config.ingestQueueOutboxDispatchConcurrency, 7);
       assert.equal(config.ingestQueueOutboxDispatchMaxBatchesPerRun, 9);
+      assert.equal(config.processingWatchdogConcurrency, 6);
     },
   );
 });
@@ -29,6 +31,7 @@ test("worker config falls back to the default outbox dispatch tuning values", ()
       CLAIMS_INGEST_OUTBOX_DISPATCH_BATCH_SIZE: undefined,
       CLAIMS_INGEST_OUTBOX_DISPATCH_CONCURRENCY: undefined,
       CLAIMS_INGEST_OUTBOX_DISPATCH_MAX_BATCHES_PER_RUN: undefined,
+      CLAIMS_PROCESSING_WATCHDOG_CONCURRENCY: undefined,
     },
     () => {
       const config = loadWorkerConfig();
@@ -36,6 +39,7 @@ test("worker config falls back to the default outbox dispatch tuning values", ()
       assert.equal(config.ingestQueueOutboxDispatchBatchSize, 25);
       assert.equal(config.ingestQueueOutboxDispatchConcurrency, 5);
       assert.equal(config.ingestQueueOutboxDispatchMaxBatchesPerRun, 4);
+      assert.equal(config.processingWatchdogConcurrency, 5);
     },
   );
 });

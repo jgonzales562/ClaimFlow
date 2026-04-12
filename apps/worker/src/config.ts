@@ -18,6 +18,7 @@ export type WorkerConfig = ClaimIngestJobConfig & {
   processingWatchdogEnabled: boolean;
   processingWatchdogIntervalMs: number;
   processingWatchdogBatchSize: number;
+  processingWatchdogConcurrency: number;
   pollWaitSeconds: number;
   visibilityTimeoutSeconds: number | undefined;
   maxMessages: number;
@@ -92,6 +93,12 @@ export function loadWorkerConfig(): WorkerConfig {
     processingWatchdogBatchSize: parseIntegerEnv(
       "CLAIMS_PROCESSING_WATCHDOG_BATCH_SIZE",
       25,
+      1,
+      100,
+    ),
+    processingWatchdogConcurrency: parseIntegerEnv(
+      "CLAIMS_PROCESSING_WATCHDOG_CONCURRENCY",
+      5,
       1,
       100,
     ),

@@ -42,6 +42,14 @@ type ExportCursor = {
   id: string;
 };
 
+type ExportStreamBatchInput = {
+  where: Prisma.ClaimWhereInput;
+  limit: number;
+  initialBatch: ExportClaimRecord[];
+  cursor: ExportCursor | null;
+  fetchClaimExportBatchFn: typeof fetchClaimExportBatch;
+};
+
 type ClaimsExportDependencies = {
   getAuthContextFn?: typeof getAuthContext;
   fetchClaimExportBatchFn?: typeof fetchClaimExportBatch;
@@ -88,16 +96,17 @@ export function createClaimsExportHandler(dependencies: ClaimsExportDependencies
       }
 
       const where = buildClaimWhereInput(auth.organizationId, filters);
+      const initialTake = Math.min(CLAIM_EXPORT_BATCH_SIZE, limit);
+      const initialBatch = await fetchClaimExportBatchFn({
+        where,
+        cursor: null,
+        take: initialTake,
+      });
+      const initialCursor =
+        initialBatch.length > 0 ? getNextExportCursor(initialBatch[initialBatch.length - 1]) : null;
 
       if (format === "json") {
-        const initialBatch = await fetchClaimExportBatchFn({
-          where,
-          cursor: null,
-          take: Math.min(CLAIM_EXPORT_BATCH_SIZE, limit),
-        });
         const exportedAt = new Date().toISOString();
-        const initialCursor =
-          initialBatch.length > 0 ? getNextExportCursor(initialBatch[initialBatch.length - 1]) : null;
 
         return new Response(
           buildJsonStreamFn({
@@ -148,35 +157,61 @@ export function createClaimsExportHandler(dependencies: ClaimsExportDependencies
             },
           }),
           {
-          status: 200,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "content-disposition": `attachment; filename="claims-export-${buildTimestampTokenFn()}.json"`,
-          },
+            status: 200,
+            headers: {
+              "content-type": "application/json; charset=utf-8",
+              "content-disposition": `attachment; filename="claims-export-${buildTimestampTokenFn()}.json"`,
+            },
           },
         );
       }
 
-      logInfoFn("claims_export_completed", {
-        organizationId: auth.organizationId,
-        userId: auth.userId,
-        format,
-        count: null,
-        limit,
-        status: filters.status,
-        hasSearch: Boolean(filters.search),
-        createdFrom: filters.createdFrom?.toISOString() ?? null,
-        createdTo: filters.createdTo?.toISOString() ?? null,
-        countPrecomputed: false,
-      });
+      return new Response(
+        buildCsvStreamFn({
+          where,
+          limit,
+          initialBatch,
+          cursor: initialCursor,
+          fetchClaimExportBatchFn,
+          onComplete: (count) => {
+            logInfoFn("claims_export_completed", {
+              organizationId: auth.organizationId,
+              userId: auth.userId,
+              format,
+              count,
+              limit,
+              status: filters.status,
+              hasSearch: Boolean(filters.search),
+              createdFrom: filters.createdFrom?.toISOString() ?? null,
+              createdTo: filters.createdTo?.toISOString() ?? null,
+              countPrecomputed: false,
+            });
+          },
+          onError: (error) => {
+            captureWebExceptionFn(error, {
+              route: "/api/claims/export",
+              organizationId: auth.organizationId,
+              userId: auth.userId,
+              format,
+              stage: "csv_stream",
+            });
 
-      return new Response(buildCsvStreamFn({ where, limit }), {
-        status: 200,
-        headers: {
-          "content-type": "text/csv; charset=utf-8",
-          "content-disposition": `attachment; filename="claims-export-${buildTimestampTokenFn()}.csv"`,
+            logErrorFn("claims_export_stream_failed", {
+              organizationId: auth.organizationId,
+              userId: auth.userId,
+              format,
+              error: extractErrorMessage(error),
+            });
+          },
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type": "text/csv; charset=utf-8",
+            "content-disposition": `attachment; filename="claims-export-${buildTimestampTokenFn()}.csv"`,
+          },
         },
-      });
+      );
     } catch (error: unknown) {
       captureWebExceptionFn(error, {
         route: "/api/claims/export",
@@ -207,6 +242,11 @@ function csvEscape(value: string | null): string {
 function buildCsvStream(input: {
   where: Prisma.ClaimWhereInput;
   limit: number;
+  initialBatch: ExportClaimRecord[];
+  cursor: ExportCursor | null;
+  fetchClaimExportBatchFn: typeof fetchClaimExportBatch;
+  onComplete?: (count: number) => void;
+  onError?: (error: unknown) => void;
 }): ReadableStream<Uint8Array> {
   const encoder = new TextEncoder();
   const header = [
@@ -227,45 +267,41 @@ function buildCsvStream(input: {
   ].join(",");
 
   let started = false;
-  let remaining = input.limit;
-  let cursor: ExportCursor | null = null;
-  let batch: ExportClaimRecord[] = [];
-  let batchIndex = 0;
+  let completed = false;
+  let count = 0;
+  const reader = createExportBatchReader(input);
+
+  const finalize = (controller: ReadableStreamDefaultController<Uint8Array>) => {
+    if (completed) {
+      return;
+    }
+
+    completed = true;
+    input.onComplete?.(count);
+    controller.close();
+  };
 
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
-      if (!started) {
-        controller.enqueue(encoder.encode(`${header}\n`));
-        started = true;
-        return;
-      }
-
-      if (batchIndex >= batch.length && remaining > 0) {
-        batch = await fetchClaimExportBatch({
-          where: input.where,
-          cursor,
-          take: Math.min(CLAIM_EXPORT_BATCH_SIZE, remaining),
-        });
-        batchIndex = 0;
-        if (batch.length > 0) {
-          cursor = getNextExportCursor(batch[batch.length - 1]);
+      try {
+        if (!started) {
+          controller.enqueue(encoder.encode(`${header}\n`));
+          started = true;
         }
+
+        const rows = await reader.readNextRows(CSV_STREAM_CHUNK_ROWS);
+        if (rows.length === 0) {
+          finalize(controller);
+          return;
+        }
+
+        controller.enqueue(encoder.encode(`${rows.map(claimToCsvRow).join("\n")}\n`));
+        count += rows.length;
+      } catch (error: unknown) {
+        completed = true;
+        input.onError?.(error);
+        controller.error(error);
       }
-
-      if (remaining <= 0 || batchIndex >= batch.length) {
-        controller.close();
-        return;
-      }
-
-      const chunkSize = Math.min(CSV_STREAM_CHUNK_ROWS, batch.length - batchIndex, remaining);
-      const lines = batch
-        .slice(batchIndex, batchIndex + chunkSize)
-        .map(claimToCsvRow)
-        .join("\n");
-
-      controller.enqueue(encoder.encode(`${lines}\n`));
-      batchIndex += chunkSize;
-      remaining -= chunkSize;
     },
   });
 }
@@ -295,12 +331,8 @@ function buildJsonStream(input: {
   let started = false;
   let completed = false;
   let count = 0;
-  let remaining = input.limit;
-  let cursor = input.cursor;
-  let batch = input.initialBatch;
-  let batchIndex = 0;
   let emittedAnyClaim = false;
-  let moreAvailable = input.initialBatch.length === Math.min(CLAIM_EXPORT_BATCH_SIZE, input.limit);
+  const reader = createExportBatchReader(input);
 
   const finalize = (controller: ReadableStreamDefaultController<Uint8Array>) => {
     if (completed) {
@@ -319,39 +351,18 @@ function buildJsonStream(input: {
         if (!started) {
           controller.enqueue(encoder.encode(prefix));
           started = true;
-          if (batch.length === 0 && remaining <= 0) {
-            finalize(controller);
-          }
-          return;
         }
 
-        if (batchIndex >= batch.length && remaining > 0 && moreAvailable) {
-          const take = Math.min(CLAIM_EXPORT_BATCH_SIZE, remaining);
-          batch = await input.fetchClaimExportBatchFn({
-            where: input.where,
-            cursor,
-            take,
-          });
-          batchIndex = 0;
-          moreAvailable = batch.length === take;
-          if (batch.length > 0) {
-            cursor = getNextExportCursor(batch[batch.length - 1]);
-          }
-        }
-
-        if (batchIndex >= batch.length) {
+        const rows = await reader.readNextRows(JSON_STREAM_CHUNK_ROWS);
+        if (rows.length === 0) {
           finalize(controller);
           return;
         }
 
-        const chunkSize = Math.min(JSON_STREAM_CHUNK_ROWS, batch.length - batchIndex, remaining);
-        const chunk = batch.slice(batchIndex, batchIndex + chunkSize);
-        const serialized = chunk.map((claim) => JSON.stringify(claim)).join(",");
+        const serialized = rows.map((claim) => JSON.stringify(claim)).join(",");
         controller.enqueue(encoder.encode(`${emittedAnyClaim ? "," : ""}${serialized}`));
         emittedAnyClaim = true;
-        batchIndex += chunkSize;
-        count += chunkSize;
-        remaining -= chunkSize;
+        count += rows.length;
       } catch (error: unknown) {
         completed = true;
         input.onError?.(error);
@@ -359,6 +370,78 @@ function buildJsonStream(input: {
       }
     },
   });
+}
+
+function createExportBatchReader(input: ExportStreamBatchInput) {
+  let remaining = input.limit;
+  let batch = input.initialBatch;
+  let batchIndex = 0;
+  let cursor = input.cursor;
+  let moreAvailable = input.initialBatch.length === Math.min(CLAIM_EXPORT_BATCH_SIZE, input.limit);
+  let nextBatchPromise: Promise<ExportClaimRecord[]> | null = null;
+
+  primeNextBatch();
+
+  return {
+    async readNextRows(maxRows: number): Promise<ExportClaimRecord[]> {
+      await ensureBatchLoaded();
+
+      if (remaining <= 0 || batchIndex >= batch.length) {
+        return [];
+      }
+
+      const chunkSize = Math.min(maxRows, batch.length - batchIndex, remaining);
+      const rows = batch.slice(batchIndex, batchIndex + chunkSize);
+      batchIndex += chunkSize;
+      remaining -= chunkSize;
+      return rows;
+    },
+  };
+
+  async function ensureBatchLoaded(): Promise<void> {
+    if (batchIndex < batch.length || remaining <= 0) {
+      return;
+    }
+
+    if (!moreAvailable) {
+      batch = [];
+      return;
+    }
+
+    const take = Math.min(CLAIM_EXPORT_BATCH_SIZE, remaining);
+    batch = nextBatchPromise
+      ? await nextBatchPromise
+      : await input.fetchClaimExportBatchFn({
+          where: input.where,
+          cursor,
+          take,
+        });
+    nextBatchPromise = null;
+    batchIndex = 0;
+    moreAvailable = batch.length === take;
+
+    if (batch.length > 0) {
+      cursor = getNextExportCursor(batch[batch.length - 1]);
+      primeNextBatch();
+    }
+  }
+
+  function primeNextBatch(): void {
+    if (nextBatchPromise || !moreAvailable || batchIndex >= batch.length) {
+      return;
+    }
+
+    const remainingAfterCurrentBatch = remaining - (batch.length - batchIndex);
+    if (remainingAfterCurrentBatch <= 0) {
+      return;
+    }
+
+    nextBatchPromise = input.fetchClaimExportBatchFn({
+      where: input.where,
+      cursor,
+      take: Math.min(CLAIM_EXPORT_BATCH_SIZE, remainingAfterCurrentBatch),
+    });
+  }
 }
 
 function claimToCsvRow(claim: ExportClaimRecord): string {
