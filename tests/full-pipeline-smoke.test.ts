@@ -113,9 +113,12 @@ test("full pipeline smoke processes a webhook claim through queue handling into 
           errors: [],
         });
         assert.deepEqual(body.queue, {
-          enqueued: true,
+          scheduled: true,
           queueUrl: "https://example.invalid/claims",
           messageId: queueMessageId,
+          dispatchState: "dispatched",
+          sqsMessageId: `sqs-${suffix}`,
+          error: null,
         });
 
         assert.notEqual(capturedQueueMessage, null);
@@ -335,9 +338,12 @@ test("full pipeline smoke moves failed worker claims to the DLQ and marks them E
         assert.equal(body.ok, true);
         assert.equal(body.claimStatus, "PROCESSING");
         assert.deepEqual(body.queue, {
-          enqueued: true,
+          scheduled: true,
           queueUrl: "https://example.invalid/claims",
           messageId: queueMessageId,
+          dispatchState: "dispatched",
+          sqsMessageId: `sqs-failure-${suffix}`,
+          error: null,
         });
 
         assert.notEqual(capturedQueueMessage, null);
@@ -531,9 +537,12 @@ test("full pipeline smoke retains source messages when DLQ publishing fails", as
         assert.equal(body.ok, true);
         assert.equal(body.claimStatus, "PROCESSING");
         assert.deepEqual(body.queue, {
-          enqueued: true,
+          scheduled: true,
           queueUrl: "https://example.invalid/claims",
           messageId: queueMessageId,
+          dispatchState: "dispatched",
+          sqsMessageId: `sqs-dlq-failure-${suffix}`,
+          error: null,
         });
 
         assert.notEqual(capturedQueueMessage, null);

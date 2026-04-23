@@ -7,7 +7,11 @@ import {
   type ClaimIngestQueueSendResult,
 } from "@claimflow/db";
 import { randomUUID } from "node:crypto";
-import { enqueueClaimIngestJob, resolveClaimIngestQueueUrl } from "../queue/claims";
+import {
+  enqueueClaimIngestJob,
+  resolveClaimIngestQueueUrl,
+  type ClaimQueueEnqueueResult as QueueDispatchResult,
+} from "../queue/claims";
 
 type ClaimIngestEnqueueInput = {
   organizationId: string;
@@ -29,20 +33,19 @@ type ClaimQueueEnqueueInput = Omit<ClaimIngestEnqueueInput, "shouldEnqueue" | "c
 
 type ClaimQueueEnqueueFn = (
   input: ClaimQueueEnqueueInput,
-) => Promise<ClaimQueueEnqueueResult>;
+) => Promise<QueueDispatchResult>;
 
-type ClaimQueueEnqueueResult =
+export type ClaimProcessingScheduleResult =
   | {
-      enqueued: true;
+      scheduled: true;
       queueUrl: string;
       messageId: string;
-      sqsMessageId?: string | null;
+      dispatchState: "dispatched" | "deferred";
+      sqsMessageId: string | null;
+      error: string | null;
     }
   | {
-      enqueued: false;
-      reason: "queue_not_configured" | "send_failed";
-      queueUrl?: string;
-      error?: string;
+      reason: "queue_not_configured";
     };
 
 type ClaimIngestEnqueueDependencies = {
@@ -56,7 +59,7 @@ type ClaimIngestEnqueueDependencies = {
 export async function maybeEnqueueClaimForProcessing(
   input: ClaimIngestEnqueueInput,
   dependencies: ClaimIngestEnqueueDependencies = {},
-): Promise<ClaimQueueEnqueueResult | null> {
+): Promise<ClaimProcessingScheduleResult | null> {
   if (!input.claimId || !input.shouldEnqueue) {
     return null;
   }
@@ -70,7 +73,6 @@ export async function maybeEnqueueClaimForProcessing(
   const queueUrl = resolveQueueUrlFn();
   if (!queueUrl) {
     return {
-      enqueued: false,
       reason: "queue_not_configured",
     };
   }
@@ -136,12 +138,12 @@ export async function maybeEnqueueClaimForProcessing(
     return null;
   }
 
-  await dispatchClaimIngestQueueOutboxById(
+  const dispatchResult = await dispatchClaimIngestQueueOutboxById(
     {
       prismaClient,
       outboxId: queueMessageId,
       sendMessageFn: async (dispatchInput): Promise<ClaimIngestQueueSendResult> => {
-        const queueResult = await enqueueClaimIngestJobFn({
+        const dispatchResult = await enqueueClaimIngestJobFn({
           claimId: dispatchInput.message.claimId,
           organizationId: dispatchInput.message.organizationId,
           inboundMessageId: dispatchInput.message.inboundMessageId,
@@ -154,23 +156,41 @@ export async function maybeEnqueueClaimForProcessing(
           enqueuedAt: new Date(dispatchInput.message.enqueuedAt),
         });
 
-        return queueResult.enqueued
+        return dispatchResult.enqueued
           ? {
               ok: true,
-              sqsMessageId: queueResult.sqsMessageId ?? null,
+              sqsMessageId: dispatchResult.sqsMessageId ?? null,
             }
           : {
               ok: false,
-              error: queueResult.error ?? "Unknown queue dispatch failure.",
+              error: dispatchResult.error ?? "Unknown queue dispatch failure.",
             };
       },
     },
   );
 
+  if (dispatchResult.kind === "not_found") {
+    throw new Error(`Claim ingest outbox row "${queueMessageId}" disappeared before dispatch.`);
+  }
+
+  if (dispatchResult.kind === "dispatched") {
+    return {
+      scheduled: true,
+      queueUrl,
+      messageId: queueMessageId,
+      dispatchState: "dispatched",
+      sqsMessageId: dispatchResult.sqsMessageId,
+      error: null,
+    };
+  }
+
   return {
-    enqueued: true,
+    scheduled: true,
     queueUrl,
     messageId: queueMessageId,
+    dispatchState: "deferred",
+    sqsMessageId: null,
+    error: dispatchResult.kind === "send_failed" ? dispatchResult.error : null,
   };
 }
 

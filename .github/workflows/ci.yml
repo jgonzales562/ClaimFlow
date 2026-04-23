@@ -43,17 +43,7 @@ jobs:
       - name: Prepare Test Environment
         run: |
           cp .env.example .env
-          python - <<'PY'
-          from pathlib import Path
-
-          env_path = Path(".env")
-          env_text = env_path.read_text()
-          env_text = env_text.replace(
-              'DATABASE_URL="postgresql://claimflowdev:Moonbeem7!@localhost:55432/claimflow?schema=public"',
-              'DATABASE_URL="postgresql://claimflowdev:claimflowdev@127.0.0.1:5432/claimflow?schema=public"',
-          )
-          env_path.write_text(env_text)
-          PY
+          sed -i 's#^DATABASE_URL=.*#DATABASE_URL="postgresql://claimflowdev:claimflowdev@127.0.0.1:5432/claimflow?schema=public"#' .env
 
       - name: Apply Database Migrations
         run: pnpm db:migrate:deploy

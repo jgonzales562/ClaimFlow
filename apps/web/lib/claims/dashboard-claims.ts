@@ -6,6 +6,7 @@ import {
   type PageDirection,
   type TimestampCursor,
 } from "./cursor-pagination";
+import { DEFAULT_DASHBOARD_PAGE_SIZE } from "./config";
 import {
   buildClaimWhereInput,
   type ClaimFilters,
@@ -61,7 +62,6 @@ export type DashboardClaimsWindow = {
 
 export type DashboardClaimsPage = DashboardPageSummary & DashboardClaimsWindow;
 
-const DEFAULT_DASHBOARD_PAGE_SIZE = 100;
 const dashboardOrderByDesc: Prisma.ClaimOrderByWithRelationInput[] = [
   { createdAt: "desc" },
   { id: "desc" },

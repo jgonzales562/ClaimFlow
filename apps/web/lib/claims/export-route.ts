@@ -7,6 +7,7 @@ import {
   formatDateInput,
   parseClaimFiltersFromUrlSearchParams,
 } from "@/lib/claims/filters";
+import { DEFAULT_CLAIMS_EXPORT_LIMIT, MAX_CLAIMS_EXPORT_LIMIT } from "@/lib/claims/config";
 import { captureWebException } from "@/lib/observability/sentry";
 import { extractErrorMessage, logError, logInfo } from "@/lib/observability/log";
 
@@ -84,7 +85,12 @@ export function createClaimsExportHandler(dependencies: ClaimsExportDependencies
     try {
       const searchParams = new URL(request.url).searchParams;
       const filters = parseClaimFiltersFromUrlSearchParams(searchParams);
-      const limit = clampLimit(searchParams.get("limit"), 1000, 1, 5000);
+      const limit = clampLimit(
+        searchParams.get("limit"),
+        DEFAULT_CLAIMS_EXPORT_LIMIT,
+        1,
+        MAX_CLAIMS_EXPORT_LIMIT,
+      );
       const formatRaw = searchParams.get("format")?.trim().toLowerCase() ?? "csv";
       const format = formatRaw === "json" ? "json" : formatRaw === "csv" ? "csv" : null;
 

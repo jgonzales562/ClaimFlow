@@ -1,4 +1,4 @@
-import { prisma } from "@claimflow/db";
+import { INBOUND_MESSAGE_RAW_PAYLOAD_SCHEMA_VERSION, prisma } from "@claimflow/db";
 import type { Prisma } from "@prisma/client";
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import path from "node:path";
@@ -11,7 +11,10 @@ import {
   parseReceivedAt,
   type PostmarkInboundPayload,
 } from "@/lib/postmark/inbound";
-import { maybeEnqueueClaimForProcessing } from "@/lib/claims/ingest";
+import {
+  maybeEnqueueClaimForProcessing,
+  type ClaimProcessingScheduleResult,
+} from "@/lib/claims/ingest";
 import { extractErrorMessage, logError } from "@/lib/observability/log";
 import { captureWebException } from "@/lib/observability/sentry";
 import { putAttachmentObject } from "@/lib/storage/s3";
@@ -113,6 +116,7 @@ export function createPostmarkInboundHandler(
           htmlBody: payload.HtmlBody ?? null,
           strippedTextReply: payload.StrippedTextReply ?? null,
           receivedAt: parseReceivedAt(payload.Date),
+          rawPayloadSchemaVersion: INBOUND_MESSAGE_RAW_PAYLOAD_SCHEMA_VERSION,
           rawPayload: payload as PostmarkInboundPayload,
           claim: {
             create: {
@@ -161,20 +165,15 @@ export function createPostmarkInboundHandler(
         shouldEnqueue: true,
       });
 
-      if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-        revalidateDashboardSummaryCacheFn(organization.id);
-        return respondToEnqueueFailure(
-          {
-            event: "webhook_enqueue_claim_failed",
-            organizationId: organization.id,
-            claimId: created.claimId,
-            messageId: created.id,
-            providerMessageId,
-            queueUrl: queueResult.queueUrl,
-            error: queueResult.error,
-          },
-          logErrorFn,
-        );
+      if (isDeferredScheduledQueueResult(queueResult)) {
+        logErrorFn("webhook_enqueue_claim_deferred", {
+          organizationId: organization.id,
+          claimId: created.claimId,
+          messageId: created.id,
+          providerMessageId,
+          queueUrl: queueResult.queueUrl,
+          error: queueResult.error,
+        });
       }
 
       revalidateDashboardSummaryCacheFn(organization.id);
@@ -183,7 +182,7 @@ export function createPostmarkInboundHandler(
         deduplicated: false,
         organizationId: organization.id,
         claimId: created.claimId,
-        claimStatus: queueResult?.enqueued ? "PROCESSING" : "NEW",
+        claimStatus: isScheduledQueueResult(queueResult) ? "PROCESSING" : "NEW",
         messageId: created.id,
         attachments: attachmentResult,
         queue: queueResult,
@@ -270,10 +269,8 @@ function authorizeRequest(request: Request): "authorized" | "forbidden" | "misco
   const providedUser = decoded.slice(0, separatorIndex);
   const providedPass = decoded.slice(separatorIndex + 1);
 
-  return (
-    secureCompare(providedUser, expectedUser ?? "") &&
+  return secureCompare(providedUser, expectedUser ?? "") &&
     secureCompare(providedPass, expectedPass ?? "")
-  )
     ? "authorized"
     : "forbidden";
 }
@@ -334,15 +331,18 @@ type ExistingInboundMessageRecord = Prisma.InboundMessageGetPayload<{
   select: typeof existingInboundMessageSelect;
 }>;
 
-async function respondForExistingInboundMessage(input: {
-  organizationId: string;
-  providerMessageId: string;
-  existingMessage: ExistingInboundMessageRecord;
-}, dependencies: {
-  maybeEnqueueClaimForProcessingFn: typeof maybeEnqueueClaimForProcessing;
-  revalidateDashboardSummaryCacheFn: (organizationId: string) => void;
-  logErrorFn: typeof logError;
-}): Promise<Response> {
+async function respondForExistingInboundMessage(
+  input: {
+    organizationId: string;
+    providerMessageId: string;
+    existingMessage: ExistingInboundMessageRecord;
+  },
+  dependencies: {
+    maybeEnqueueClaimForProcessingFn: typeof maybeEnqueueClaimForProcessing;
+    revalidateDashboardSummaryCacheFn: (organizationId: string) => void;
+    logErrorFn: typeof logError;
+  },
+): Promise<Response> {
   const { organizationId, providerMessageId, existingMessage } = input;
   const queueResult = await dependencies.maybeEnqueueClaimForProcessingFn({
     organizationId,
@@ -352,23 +352,18 @@ async function respondForExistingInboundMessage(input: {
     shouldEnqueue: existingMessage.claim?.status === "NEW",
   });
 
-  if (queueResult && !queueResult.enqueued && queueResult.reason === "send_failed") {
-    dependencies.revalidateDashboardSummaryCacheFn(organizationId);
-    return respondToEnqueueFailure(
-      {
-        event: "webhook_enqueue_deduplicated_failed",
-        organizationId,
-        claimId: existingMessage.claimId,
-        messageId: existingMessage.id,
-        providerMessageId,
-        queueUrl: queueResult.queueUrl,
-        error: queueResult.error,
-      },
-      dependencies.logErrorFn,
-    );
+  if (isDeferredScheduledQueueResult(queueResult)) {
+    dependencies.logErrorFn("webhook_enqueue_deduplicated_deferred", {
+      organizationId,
+      claimId: existingMessage.claimId,
+      messageId: existingMessage.id,
+      providerMessageId,
+      queueUrl: queueResult.queueUrl,
+      error: queueResult.error,
+    });
   }
 
-  if (queueResult?.enqueued) {
+  if (isScheduledQueueResult(queueResult)) {
     dependencies.revalidateDashboardSummaryCacheFn(organizationId);
   }
 
@@ -378,43 +373,45 @@ async function respondForExistingInboundMessage(input: {
     messageId: existingMessage.id,
     claimId: existingMessage.claimId,
     receivedAt: existingMessage.createdAt.toISOString(),
-    claimStatus:
-      queueResult?.enqueued === true ? "PROCESSING" : (existingMessage.claim?.status ?? null),
+    claimStatus: isScheduledQueueResult(queueResult)
+      ? "PROCESSING"
+      : (existingMessage.claim?.status ?? null),
     queue: queueResult,
   });
 }
 
-function respondToEnqueueFailure(input: {
-  event: "webhook_enqueue_claim_failed" | "webhook_enqueue_deduplicated_failed";
-  organizationId: string;
-  claimId: string | null;
-  messageId: string;
-  providerMessageId: string;
-  queueUrl: string | undefined;
-  error: string | undefined;
-}, logErrorFn: typeof logError): Response {
-  logErrorFn(input.event, {
-    organizationId: input.organizationId,
-    claimId: input.claimId,
-    messageId: input.messageId,
-    providerMessageId: input.providerMessageId,
-    queueUrl: input.queueUrl,
-    error: input.error,
-  });
-
-  return Response.json({ error: "Unable to enqueue claim for processing" }, { status: 500 });
+function isScheduledQueueResult(
+  queueResult: ClaimProcessingScheduleResult | null,
+): queueResult is Extract<ClaimProcessingScheduleResult, { scheduled: true }> {
+  return Boolean(queueResult && "scheduled" in queueResult && queueResult.scheduled);
 }
 
-async function persistAttachments(input: {
-  organizationId: string;
-  claimId: string;
-  inboundMessageId: string;
-  providerMessageId: string;
-  attachments: NormalizedPostmarkAttachment[];
-}, dependencies: {
-  prismaClient: typeof prisma;
-  putAttachmentObjectFn: typeof putAttachmentObject;
-}) {
+function isDeferredScheduledQueueResult(
+  queueResult: ClaimProcessingScheduleResult | null,
+): queueResult is Extract<ClaimProcessingScheduleResult, { scheduled: true }> & {
+  dispatchState: "deferred";
+  error: string;
+} {
+  return (
+    isScheduledQueueResult(queueResult) &&
+    queueResult.dispatchState === "deferred" &&
+    typeof queueResult.error === "string"
+  );
+}
+
+async function persistAttachments(
+  input: {
+    organizationId: string;
+    claimId: string;
+    inboundMessageId: string;
+    providerMessageId: string;
+    attachments: NormalizedPostmarkAttachment[];
+  },
+  dependencies: {
+    prismaClient: typeof prisma;
+    putAttachmentObjectFn: typeof putAttachmentObject;
+  },
+) {
   if (input.attachments.length === 0) {
     return {
       received: 0,
@@ -428,14 +425,17 @@ async function persistAttachments(input: {
     input.attachments,
     ATTACHMENT_PERSIST_CONCURRENCY,
     async (attachment, index) =>
-      prepareAttachmentPersistence({
-        index,
-        organizationId: input.organizationId,
-        claimId: input.claimId,
-        inboundMessageId: input.inboundMessageId,
-        providerMessageId: input.providerMessageId,
-        attachment,
-      }, dependencies),
+      prepareAttachmentPersistence(
+        {
+          index,
+          organizationId: input.organizationId,
+          claimId: input.claimId,
+          inboundMessageId: input.inboundMessageId,
+          providerMessageId: input.providerMessageId,
+          attachment,
+        },
+        dependencies,
+      ),
   );
 
   const storedRows = results.filter(
@@ -445,7 +445,10 @@ async function persistAttachments(input: {
     (result): result is PreparedFailedAttachmentPersistence => result.kind === "failed",
   );
   await persistFailedAttachmentRows(failedRows, dependencies.prismaClient);
-  const storedWriteFailures = await persistStoredAttachmentRows(storedRows, dependencies.prismaClient);
+  const storedWriteFailures = await persistStoredAttachmentRows(
+    storedRows,
+    dependencies.prismaClient,
+  );
   const errors = [...failedRows, ...storedWriteFailures]
     .sort((left, right) => left.index - right.index)
     .map((result) => result.error);
@@ -475,18 +478,19 @@ type PreparedFailedAttachmentPersistence = {
   };
 };
 
-async function prepareAttachmentPersistence(input: {
-  index: number;
-  organizationId: string;
-  claimId: string;
-  inboundMessageId: string;
-  providerMessageId: string;
-  attachment: NormalizedPostmarkAttachment;
-}, dependencies: {
-  putAttachmentObjectFn: typeof putAttachmentObject;
-}): Promise<
-  PreparedStoredAttachmentPersistence | PreparedFailedAttachmentPersistence
-> {
+async function prepareAttachmentPersistence(
+  input: {
+    index: number;
+    organizationId: string;
+    claimId: string;
+    inboundMessageId: string;
+    providerMessageId: string;
+    attachment: NormalizedPostmarkAttachment;
+  },
+  dependencies: {
+    putAttachmentObjectFn: typeof putAttachmentObject;
+  },
+): Promise<PreparedStoredAttachmentPersistence | PreparedFailedAttachmentPersistence> {
   const attachment = input.attachment;
   const attachmentId = randomUUID();
   const safeFilename = sanitizeFilename(attachment.originalFilename);
@@ -648,9 +652,7 @@ async function persistStoredAttachmentRows(
       }),
     );
 
-    return failedRows.filter(
-      (row): row is PreparedFailedAttachmentPersistence => row !== null,
-    );
+    return failedRows.filter((row): row is PreparedFailedAttachmentPersistence => row !== null);
   }
 }
 

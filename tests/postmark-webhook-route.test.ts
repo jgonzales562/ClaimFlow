@@ -72,7 +72,6 @@ test("postmark webhook uses the default org fallback only when explicitly enable
       const handler = createPostmarkInboundHandler({
         prismaClient: prisma,
         maybeEnqueueClaimForProcessingFn: async () => ({
-          enqueued: false,
           reason: "queue_not_configured",
         }),
       });
@@ -286,10 +285,12 @@ test("postmark webhook returns deduplicated response for existing inbound messag
           },
           select: {
             id: true,
+            rawPayloadSchemaVersion: true,
           },
         });
 
         assert.equal(messages.length, 1);
+        assert.equal(messages[0]?.rawPayloadSchemaVersion, 1);
         assert.deepEqual(revalidatedOrganizations, []);
       } finally {
         await prisma.organization.delete({
@@ -324,7 +325,6 @@ test("postmark webhook persists stored attachments and returns attachment counts
       const handler = createPostmarkInboundHandler({
         prismaClient: prisma,
         maybeEnqueueClaimForProcessingFn: async () => ({
-          enqueued: false,
           reason: "queue_not_configured",
         }),
         revalidateDashboardSummaryCacheFn: (organizationId) => {
@@ -395,7 +395,6 @@ test("postmark webhook persists stored attachments and returns attachment counts
         assert.equal(body.deduplicated, false);
         assert.equal(body.claimStatus, "NEW");
         assert.deepEqual(body.queue, {
-          enqueued: false,
           reason: "queue_not_configured",
         });
         assert.deepEqual(body.attachments, {
@@ -411,7 +410,10 @@ test("postmark webhook persists stored attachments and returns attachment counts
         assert.equal(storedObjects[0]?.metadata?.provider_message_id, providerMessageId);
         assert.equal(typeof storedObjects[0]?.metadata?.claim_id, "string");
         assert.equal(typeof storedObjects[0]?.metadata?.inbound_message_id, "string");
-        assert.match(storedObjects[0]?.key ?? "", /^orgs\/.+\/claims\/.+\/messages\/.+\/.+-receipt\.pdf$/);
+        assert.match(
+          storedObjects[0]?.key ?? "",
+          /^orgs\/.+\/claims\/.+\/messages\/.+\/.+-receipt\.pdf$/,
+        );
         assert.deepEqual(revalidatedOrganizations, [organization.id]);
 
         const attachments = await prisma.claimAttachment.findMany({
@@ -434,7 +436,10 @@ test("postmark webhook persists stored attachments and returns attachment counts
         assert.equal(attachments[0]?.contentType, "application/pdf");
         assert.equal(attachments[0]?.byteSize, 5);
         assert.equal(attachments[0]?.s3Bucket, "test-bucket");
-        assert.match(attachments[0]?.s3Key ?? "", /^test-prefix\/orgs\/.+\/claims\/.+\/messages\/.+\/.+-receipt\.pdf$/);
+        assert.match(
+          attachments[0]?.s3Key ?? "",
+          /^test-prefix\/orgs\/.+\/claims\/.+\/messages\/.+\/.+-receipt\.pdf$/,
+        );
       } finally {
         await prisma.organization.delete({
           where: {
@@ -462,7 +467,6 @@ test("postmark webhook rejects malformed attachment base64 and records the attac
       const handler = createPostmarkInboundHandler({
         prismaClient: prisma,
         maybeEnqueueClaimForProcessingFn: async () => ({
-          enqueued: false,
           reason: "queue_not_configured",
         }),
         putAttachmentObjectFn: async (input) => {
@@ -551,10 +555,7 @@ test("postmark webhook rejects malformed attachment base64 and records the attac
         assert.equal(attachments[0]?.uploadStatus, "FAILED");
         assert.equal(attachments[0]?.originalFilename, "receipt.pdf");
         assert.equal(attachments[0]?.byteSize, 10);
-        assert.equal(
-          attachments[0]?.errorMessage,
-          "Attachment content is not valid base64.",
-        );
+        assert.equal(attachments[0]?.errorMessage, "Attachment content is not valid base64.");
       } finally {
         await prisma.organization.delete({
           where: {
@@ -582,7 +583,6 @@ test("postmark webhook persists mixed attachment outcomes in one request", async
       const handler = createPostmarkInboundHandler({
         prismaClient: prisma,
         maybeEnqueueClaimForProcessingFn: async () => ({
-          enqueued: false,
           reason: "queue_not_configured",
         }),
         putAttachmentObjectFn: async (input) => {
@@ -668,10 +668,10 @@ test("postmark webhook persists mixed attachment outcomes in one request", async
         });
 
         assert.equal(storedObjects.length, 2);
-        assert.deepEqual(
-          storedObjects.map((object) => object.body).sort(),
-          ["hello", "serial-123"],
-        );
+        assert.deepEqual(storedObjects.map((object) => object.body).sort(), [
+          "hello",
+          "serial-123",
+        ]);
 
         const attachments = await prisma.claimAttachment.findMany({
           where: {
@@ -725,7 +725,7 @@ test("postmark webhook persists mixed attachment outcomes in one request", async
   );
 });
 
-test("postmark webhook returns 500 when enqueueing fails after persistence", async () => {
+test("postmark webhook accepts persisted claims when immediate dispatch is deferred", async () => {
   const suffix = randomUUID();
   const mailboxHash = `mailbox-${suffix}`;
   const providerMessageId = `message-${suffix}`;
@@ -740,12 +740,27 @@ test("postmark webhook returns 500 when enqueueing fails after persistence", asy
     async () => {
       const handler = createPostmarkInboundHandler({
         prismaClient: prisma,
-        maybeEnqueueClaimForProcessingFn: async () => ({
-          enqueued: false,
-          reason: "send_failed",
-          queueUrl: "https://example.invalid/claims",
-          error: "simulated queue failure",
-        }),
+        maybeEnqueueClaimForProcessingFn: async (input) => {
+          if (input.claimId) {
+            await prisma.claim.update({
+              where: {
+                id: input.claimId,
+              },
+              data: {
+                status: "PROCESSING",
+              },
+            });
+          }
+
+          return {
+            scheduled: true,
+            queueUrl: "https://example.invalid/claims",
+            messageId: `queue-${suffix}`,
+            dispatchState: "deferred" as const,
+            sqsMessageId: null,
+            error: "simulated queue failure",
+          };
+        },
         revalidateDashboardSummaryCacheFn: (organizationId) => {
           revalidatedOrganizations.push(organizationId);
         },
@@ -787,10 +802,7 @@ test("postmark webhook returns 500 when enqueueing fails after persistence", asy
           }),
         );
 
-        assert.equal(response.status, 500);
-        assert.deepEqual(await response.json(), {
-          error: "Unable to enqueue claim for processing",
-        });
+        assert.equal(response.status, 200);
 
         const inboundMessages = await prisma.inboundMessage.findMany({
           where: {
@@ -800,11 +812,13 @@ test("postmark webhook returns 500 when enqueueing fails after persistence", asy
           select: {
             id: true,
             claimId: true,
+            rawPayloadSchemaVersion: true,
           },
         });
 
         assert.equal(inboundMessages.length, 1);
         assert.equal(typeof inboundMessages[0]?.claimId, "string");
+        assert.equal(inboundMessages[0]?.rawPayloadSchemaVersion, 1);
 
         const claims = await prisma.claim.findMany({
           where: {
@@ -823,9 +837,32 @@ test("postmark webhook returns 500 when enqueueing fails after persistence", asy
         });
 
         assert.equal(claims.length, 1);
-        assert.equal(claims[0]?.status, "NEW");
+        assert.equal(claims[0]?.status, "PROCESSING");
         assert.equal(claims[0]?.events.length, 0);
         assert.deepEqual(revalidatedOrganizations, [organization.id]);
+
+        assert.deepEqual(await response.json(), {
+          ok: true,
+          deduplicated: false,
+          organizationId: organization.id,
+          claimId: claims[0]?.id,
+          claimStatus: "PROCESSING",
+          messageId: inboundMessages[0]?.id,
+          attachments: {
+            received: 0,
+            stored: 0,
+            failed: 0,
+            errors: [],
+          },
+          queue: {
+            scheduled: true,
+            queueUrl: "https://example.invalid/claims",
+            messageId: `queue-${suffix}`,
+            dispatchState: "deferred",
+            sqsMessageId: null,
+            error: "simulated queue failure",
+          },
+        });
       } finally {
         await prisma.organization.delete({
           where: {

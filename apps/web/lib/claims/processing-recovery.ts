@@ -35,7 +35,6 @@ export async function recoverStaleProcessingClaim(
   | { kind: "recovery_not_allowed" }
   | { kind: "recovery_unavailable" }
   | { kind: "queue_not_configured" }
-  | { kind: "enqueue_failed" }
   | { kind: "recovered"; claimId: string }
 > {
   const prismaClient = dependencies.prismaClient ?? prisma;
@@ -154,7 +153,7 @@ export async function recoverStaleProcessingClaim(
     return { kind: "recovery_not_allowed" };
   }
 
-  await dispatchClaimIngestQueueOutboxById(
+  const dispatchResult = await dispatchClaimIngestQueueOutboxById(
     {
       prismaClient,
       outboxId: queueMessageId,
@@ -187,6 +186,10 @@ export async function recoverStaleProcessingClaim(
       nowFn: () => now,
     },
   );
+
+  if (dispatchResult.kind === "not_found") {
+    throw new Error(`Claim ingest outbox row "${queueMessageId}" disappeared before dispatch.`);
+  }
 
   return {
     kind: "recovered",

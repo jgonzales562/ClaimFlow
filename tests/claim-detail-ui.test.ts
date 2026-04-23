@@ -16,9 +16,12 @@ test("claim detail notice and error mappings return expected user-facing message
   assert.equal(mapClaimDetailNotice("claim_updated"), "Claim updates saved.");
   assert.equal(
     mapClaimDetailNotice("claim_processing_recovery_started"),
-    "Processing recovery queued. The worker will retry this claim.",
+    "Processing recovery queued. A worker will resume this claim shortly.",
   );
-  assert.equal(mapClaimDetailNotice("claim_retry_started"), "Claim retry queued. Processing has resumed.");
+  assert.equal(
+    mapClaimDetailNotice("claim_retry_started"),
+    "Claim retry queued. A worker will resume processing shortly.",
+  );
   assert.equal(mapClaimDetailNotice("status_unchanged"), "Status was already set to that value.");
   assert.equal(mapClaimDetailNotice("unknown"), null);
 

@@ -41,7 +41,14 @@ test("webhook enqueue transitions NEW claims to PROCESSING and records one event
       },
     );
 
-    assert.equal(queueResult?.enqueued, true);
+    assert.deepEqual(queueResult, {
+      scheduled: true,
+      queueUrl: "https://example.invalid/claims",
+      messageId: queueMessageId,
+      dispatchState: "dispatched",
+      sqsMessageId: "aws-message-id",
+      error: null,
+    });
 
     const updatedClaim = await prisma.claim.findUniqueOrThrow({
       where: { id: claimId },
@@ -107,9 +114,12 @@ test("webhook enqueue keeps claim processing scheduled when the immediate queue 
     );
 
     assert.deepEqual(queueResult, {
-      enqueued: true,
+      scheduled: true,
       queueUrl: "https://example.invalid/claims",
       messageId: queueMessageId,
+      dispatchState: "deferred",
+      sqsMessageId: null,
+      error: "simulated queue failure",
     });
 
     const updatedClaim = await prisma.claim.findUniqueOrThrow({

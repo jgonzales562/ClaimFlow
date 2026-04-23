@@ -141,9 +141,9 @@ export function mapClaimDetailNotice(value: string | null): string | null {
     case "claim_updated":
       return "Claim updates saved.";
     case "claim_processing_recovery_started":
-      return "Processing recovery queued. The worker will retry this claim.";
+      return "Processing recovery queued. A worker will resume this claim shortly.";
     case "claim_retry_started":
-      return "Claim retry queued. Processing has resumed.";
+      return "Claim retry queued. A worker will resume processing shortly.";
     case "status_updated":
       return "Claim status updated.";
     case "status_unchanged":
@@ -157,16 +157,12 @@ export function mapClaimDetailNotice(value: string | null): string | null {
 
 export function mapClaimDetailError(value: string | null): string | null {
   switch (value) {
-    case "claim_processing_recovery_failed":
-      return "Unable to enqueue processing recovery for this claim.";
     case "claim_processing_recovery_not_allowed":
       return "This claim is not eligible for processing recovery.";
     case "claim_processing_recovery_not_configured":
       return "Claim processing recovery queue is not configured for this environment.";
     case "claim_processing_recovery_unavailable":
       return "This claim does not have enough inbound message context to recover processing.";
-    case "claim_retry_failed":
-      return "Unable to enqueue the claim retry.";
     case "claim_retry_not_allowed":
       return "This claim cannot be retried from the dashboard.";
     case "claim_retry_not_configured":

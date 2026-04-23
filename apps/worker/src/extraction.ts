@@ -1,3 +1,4 @@
+import { CLAIM_EXTRACTION_SCHEMA_VERSION } from "@claimflow/db";
 import OpenAI from "openai";
 import { z } from "zod";
 import { truncateNullableString, truncateString } from "./strings.js";
@@ -50,7 +51,7 @@ export type ClaimExtractionResult = {
 
 type RetryableErrorLike = Error & { retryable: boolean };
 
-let openAiClient: OpenAI | undefined;
+const openAiClientsByApiKey = new Map<string, OpenAI>();
 
 const CLAIM_EXTRACTION_JSON_SCHEMA = {
   type: "object",
@@ -104,7 +105,7 @@ export async function extractClaimData(
     return {
       provider: "FALLBACK",
       model: "fallback-local-heuristic-v1",
-      schemaVersion: 1,
+      schemaVersion: CLAIM_EXTRACTION_SCHEMA_VERSION,
       extraction: fallbackExtraction,
       rawOutput: {
         fallback: true,
@@ -181,7 +182,7 @@ export async function extractClaimData(
   return {
     provider: "OPENAI",
     model: response.model ?? config.model,
-    schemaVersion: 1,
+    schemaVersion: CLAIM_EXTRACTION_SCHEMA_VERSION,
     extraction: normalizeExtraction(validated.data),
     rawOutput: {
       id: response.id,
@@ -194,12 +195,18 @@ export async function extractClaimData(
 }
 
 function getOpenAiClient(apiKey: string): OpenAI {
-  if (openAiClient) {
-    return openAiClient;
+  const existingClient = openAiClientsByApiKey.get(apiKey);
+  if (existingClient) {
+    return existingClient;
   }
 
-  openAiClient = new OpenAI({ apiKey });
-  return openAiClient;
+  const client = new OpenAI({ apiKey });
+  openAiClientsByApiKey.set(apiKey, client);
+  return client;
+}
+
+export function resetOpenAiClientCache(): void {
+  openAiClientsByApiKey.clear();
 }
 
 function fallbackExtractionFromInbound(input: ClaimExtractionInput): ClaimExtractionPayload {

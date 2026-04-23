@@ -84,6 +84,7 @@ test("dashboard claim review persists changed fields and writes a MANUAL_EDIT ev
           },
           select: {
             actorUserId: true,
+            payloadSchemaVersion: true,
             payload: true,
           },
         },
@@ -100,6 +101,7 @@ test("dashboard claim review persists changed fields and writes a MANUAL_EDIT ev
     assert.deepEqual(updatedClaim.missingInfo, []);
     assert.equal(updatedClaim.events.length, 1);
     assert.equal(updatedClaim.events[0]?.actorUserId, userId);
+    assert.equal(updatedClaim.events[0]?.payloadSchemaVersion, 1);
     assert.deepEqual(readPayloadRecord(updatedClaim.events[0]?.payload), {
       changedFields: result.changedFields,
     });

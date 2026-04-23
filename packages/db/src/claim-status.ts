@@ -1,4 +1,5 @@
 import type { ClaimStatus, Prisma } from "@prisma/client";
+import { CLAIM_EVENT_PAYLOAD_SCHEMA_VERSION } from "./json-schema-versions.js";
 
 type ClaimStatusTransitionInput = {
   tx: Prisma.TransactionClient;
@@ -19,6 +20,7 @@ export async function recordClaimStatusTransition(
       claimId: input.claimId,
       actorUserId: input.actorUserId ?? null,
       eventType: "STATUS_TRANSITION",
+      payloadSchemaVersion: CLAIM_EVENT_PAYLOAD_SCHEMA_VERSION,
       payload: {
         fromStatus: input.fromStatus,
         toStatus: input.toStatus,

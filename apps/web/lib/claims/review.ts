@@ -1,4 +1,8 @@
-import { prisma, recordClaimStatusTransition } from "@claimflow/db";
+import {
+  CLAIM_EVENT_PAYLOAD_SCHEMA_VERSION,
+  prisma,
+  recordClaimStatusTransition,
+} from "@claimflow/db";
 import type { ClaimStatus, WarrantyStatus } from "@prisma/client";
 import { formatDateInput } from "./filters";
 
@@ -102,6 +106,7 @@ export async function updateClaimReview(
         claimId: claim.id,
         actorUserId: input.actorUserId,
         eventType: "MANUAL_EDIT",
+        payloadSchemaVersion: CLAIM_EVENT_PAYLOAD_SCHEMA_VERSION,
         payload: {
           changedFields,
         },

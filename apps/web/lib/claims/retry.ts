@@ -33,7 +33,6 @@ export async function retryErroredClaim(
   | { kind: "retry_not_allowed" }
   | { kind: "retry_unavailable" }
   | { kind: "queue_not_configured" }
-  | { kind: "enqueue_failed" }
   | { kind: "retried"; claimId: string }
 > {
   const prismaClient = dependencies.prismaClient ?? prisma;
@@ -133,7 +132,7 @@ export async function retryErroredClaim(
   });
 
   if (transitioned) {
-    await dispatchClaimIngestQueueOutboxById(
+    const dispatchResult = await dispatchClaimIngestQueueOutboxById(
       {
         prismaClient,
         outboxId: queueMessageId,
@@ -166,6 +165,10 @@ export async function retryErroredClaim(
         nowFn: () => now,
       },
     );
+
+    if (dispatchResult.kind === "not_found") {
+      throw new Error(`Claim ingest outbox row "${queueMessageId}" disappeared before dispatch.`);
+    }
 
     return {
       kind: "retried",

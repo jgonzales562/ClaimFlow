@@ -35,7 +35,7 @@ export type ClaimQueueEnqueueResult =
       error?: string;
     };
 
-let sqsClientSingleton: SQSClient | undefined;
+const sqsClientsByRegion = new Map<string, SQSClient>();
 
 export async function enqueueClaimIngestJob(
   input: ClaimQueueEnqueueInput,
@@ -115,15 +115,21 @@ function normalizeMessageId(value: string | undefined): string {
 }
 
 function getSqsClient(): SQSClient {
-  if (sqsClientSingleton) {
-    return sqsClientSingleton;
-  }
-
   const region = process.env.AWS_REGION?.trim();
   if (!region) {
     throw new Error("AWS_REGION is required when using SQS.");
   }
 
-  sqsClientSingleton = new SQSClient({ region });
-  return sqsClientSingleton;
+  const existingClient = sqsClientsByRegion.get(region);
+  if (existingClient) {
+    return existingClient;
+  }
+
+  const client = new SQSClient({ region });
+  sqsClientsByRegion.set(region, client);
+  return client;
+}
+
+export function resetSqsClientCache(): void {
+  sqsClientsByRegion.clear();
 }

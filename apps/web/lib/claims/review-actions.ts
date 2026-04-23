@@ -163,10 +163,6 @@ export function createDashboardClaimActionHandlers(
       );
     }
 
-    if (result.kind === "enqueue_failed") {
-      dependencies.redirectFn(appendRedirectState(returnTo, "error", "claim_retry_failed"));
-    }
-
     dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn("/dashboard/errors");
@@ -204,12 +200,6 @@ export function createDashboardClaimActionHandlers(
     if (result.kind === "queue_not_configured") {
       dependencies.redirectFn(
         appendRedirectState(returnTo, "error", "claim_processing_recovery_not_configured"),
-      );
-    }
-
-    if (result.kind === "enqueue_failed") {
-      dependencies.redirectFn(
-        appendRedirectState(returnTo, "error", "claim_processing_recovery_failed"),
       );
     }
 

@@ -12,6 +12,10 @@ import {
 } from "@/components/ui/dashboard";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { parsePageDirection, parseTimestampCursor } from "@/lib/claims/cursor-pagination";
+import {
+  DEFAULT_CLAIMS_EXPORT_LIMIT,
+  DEFAULT_DASHBOARD_PAGE_SIZE,
+} from "@/lib/claims/config";
 import { listDashboardClaimWindow } from "@/lib/claims/dashboard-claims";
 import {
   CLAIM_STATUSES,
@@ -37,7 +41,6 @@ type DashboardPageProps = {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 };
 
-const DASHBOARD_PAGE_SIZE = 100;
 const numberFormatter = new Intl.NumberFormat("en-US");
 type DashboardPageSummaryResult = Awaited<ReturnType<typeof loadCachedDashboardPageSummary>>;
 type DashboardOperationalSummaryResult = Awaited<
@@ -93,7 +96,7 @@ export function createDashboardPage(dependencies: Partial<DashboardPageDependenc
         filters,
         cursor,
         direction,
-        pageSize: DASHBOARD_PAGE_SIZE,
+        pageSize: DEFAULT_DASHBOARD_PAGE_SIZE,
       }),
       summaryPromise,
     ]);
@@ -137,8 +140,8 @@ export function createDashboardPage(dependencies: Partial<DashboardPageDependenc
     const intakeShare = toPercent(intakeCount, totalClaims);
     const reviewLoadShare = toPercent(reviewRequiredCount + errorCount, totalClaims);
     const readyShare = toPercent(readyCount, totalClaims);
-    const csvExportHref = buildClaimsExportHref(filters, "csv", 1000);
-    const jsonExportHref = buildClaimsExportHref(filters, "json", 1000);
+    const csvExportHref = buildClaimsExportHref(filters, "csv", DEFAULT_CLAIMS_EXPORT_LIMIT);
+    const jsonExportHref = buildClaimsExportHref(filters, "json", DEFAULT_CLAIMS_EXPORT_LIMIT);
 
     return (
       <main className="app-shell app-shell--wide app-shell--ops page-stack">

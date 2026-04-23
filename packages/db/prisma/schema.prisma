@@ -52,33 +52,33 @@ enum ClaimEventType {
 }
 
 model Organization {
-  id                     String                   @id @default(cuid())
-  name                   String
-  slug                   String                   @unique
-  createdAt              DateTime                 @default(now())
-  updatedAt              DateTime                 @updatedAt
-  memberships            Membership[]
-  claims                 Claim[]
+  id                       String                    @id @default(cuid())
+  name                     String
+  slug                     String                    @unique
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  memberships              Membership[]
+  claims                   Claim[]
   claimOrganizationSummary ClaimOrganizationSummary?
-  integrationMailbox     IntegrationMailbox[]
-  inboundMessages        InboundMessage[]
-  claimAttachments       ClaimAttachment[]
-  claimExtractions       ClaimExtraction[]
-  claimEvents            ClaimEvent[]
-  claimIngestQueueOutbox ClaimIngestQueueOutbox[]
+  integrationMailbox       IntegrationMailbox[]
+  inboundMessages          InboundMessage[]
+  claimAttachments         ClaimAttachment[]
+  claimExtractions         ClaimExtraction[]
+  claimEvents              ClaimEvent[]
+  claimIngestQueueOutbox   ClaimIngestQueueOutbox[]
 }
 
 model ClaimOrganizationSummary {
-  organizationId        String       @id
-  totalClaims           Int          @default(0)
-  newCount              Int          @default(0)
-  processingCount       Int          @default(0)
-  reviewRequiredCount   Int          @default(0)
-  readyCount            Int          @default(0)
-  errorCount            Int          @default(0)
-  createdAt             DateTime     @default(now())
-  updatedAt             DateTime     @updatedAt
-  organization          Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  organizationId      String       @id
+  totalClaims         Int          @default(0)
+  newCount            Int          @default(0)
+  processingCount     Int          @default(0)
+  reviewRequiredCount Int          @default(0)
+  readyCount          Int          @default(0)
+  errorCount          Int          @default(0)
+  createdAt           DateTime     @default(now())
+  updatedAt           DateTime     @updatedAt
+  organization        Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 model User {
@@ -193,26 +193,28 @@ model IntegrationMailbox {
 }
 
 model InboundMessage {
-  id                String               @id @default(cuid())
-  organizationId    String
-  provider          InboundEmailProvider @default(POSTMARK)
-  providerMessageId String
-  mailboxHash       String?
-  fromEmail         String?
-  fromName          String?
-  toEmail           String?
-  subject           String?
-  receivedAt        DateTime?
-  textBody          String?
-  htmlBody          String?
-  strippedTextReply String?
-  rawPayload        Json
-  claimId           String?
-  createdAt         DateTime             @default(now())
-  organization      Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  claim             Claim?               @relation(fields: [claimId], references: [id], onDelete: SetNull)
-  attachments       ClaimAttachment[]
-  extractions       ClaimExtraction[]
+  id                      String               @id @default(cuid())
+  organizationId          String
+  provider                InboundEmailProvider @default(POSTMARK)
+  providerMessageId       String
+  mailboxHash             String?
+  fromEmail               String?
+  fromName                String?
+  toEmail                 String?
+  subject                 String?
+  receivedAt              DateTime?
+  textBody                String?
+  htmlBody                String?
+  strippedTextReply       String?
+  /// Version for our stored provider payload contract.
+  rawPayloadSchemaVersion Int                  @default(1)
+  rawPayload              Json
+  claimId                 String?
+  createdAt               DateTime             @default(now())
+  organization            Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim                   Claim?               @relation(fields: [claimId], references: [id], onDelete: SetNull)
+  attachments             ClaimAttachment[]
+  extractions             ClaimExtraction[]
 
   @@unique([organizationId, provider, providerMessageId])
   @@index([organizationId, createdAt])
@@ -266,16 +268,18 @@ model ClaimExtraction {
 }
 
 model ClaimEvent {
-  id             String         @id @default(cuid())
-  organizationId String
-  claimId        String
-  actorUserId    String?
-  eventType      ClaimEventType
-  payload        Json
-  createdAt      DateTime       @default(now())
-  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  claim          Claim          @relation(fields: [claimId], references: [id], onDelete: Cascade)
-  actorUser      User?          @relation("ClaimEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  id                   String         @id @default(cuid())
+  organizationId       String
+  claimId              String
+  actorUserId          String?
+  eventType            ClaimEventType
+  /// Version for our internal event payload contract.
+  payloadSchemaVersion Int            @default(1)
+  payload              Json
+  createdAt            DateTime       @default(now())
+  organization         Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim                Claim          @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  actorUser            User?          @relation("ClaimEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
   @@index([claimId, createdAt, id], map: "ClaimEvent_claimId_createdAt_id_idx")

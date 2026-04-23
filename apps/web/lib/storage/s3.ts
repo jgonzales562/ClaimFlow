@@ -22,8 +22,7 @@ type SignedAttachmentAccessInput = {
   disposition?: "attachment" | "inline";
 };
 
-let clientSingleton: S3Client | undefined;
-let attachmentStorageConfigSingleton: AttachmentStorageConfig | undefined;
+const s3ClientsByRegion = new Map<string, S3Client>();
 
 export async function putAttachmentObject(input: PutAttachmentObjectInput): Promise<{
   bucket: string;
@@ -72,24 +71,22 @@ export async function createSignedAttachmentAccessUrl(
 }
 
 function getS3Client(): S3Client {
-  if (clientSingleton) {
-    return clientSingleton;
-  }
-
   const region = process.env.AWS_REGION?.trim();
   if (!region) {
     throw new Error("AWS_REGION is required to upload attachments to S3.");
   }
 
-  clientSingleton = new S3Client({ region });
-  return clientSingleton;
+  const existingClient = s3ClientsByRegion.get(region);
+  if (existingClient) {
+    return existingClient;
+  }
+
+  const client = new S3Client({ region });
+  s3ClientsByRegion.set(region, client);
+  return client;
 }
 
 function getAttachmentStorageConfig(): AttachmentStorageConfig {
-  if (attachmentStorageConfigSingleton) {
-    return attachmentStorageConfigSingleton;
-  }
-
   const bucket = process.env.ATTACHMENTS_S3_BUCKET?.trim();
   if (!bucket) {
     throw new Error("ATTACHMENTS_S3_BUCKET is required to upload attachments.");
@@ -97,12 +94,14 @@ function getAttachmentStorageConfig(): AttachmentStorageConfig {
 
   const prefix = process.env.ATTACHMENTS_S3_PREFIX?.trim() ?? "claimflow";
 
-  attachmentStorageConfigSingleton = {
+  return {
     bucket,
     prefix: trimSlashes(prefix),
   };
+}
 
-  return attachmentStorageConfigSingleton;
+export function resetS3ClientCache(): void {
+  s3ClientsByRegion.clear();
 }
 
 function trimSlashes(value: string): string {
