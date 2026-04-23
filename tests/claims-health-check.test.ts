@@ -54,6 +54,10 @@ test("claims health check returns failure details for degraded responses", async
               dueCount: 3,
               oldestDueAgeMinutes: 18,
             },
+            extraction: {
+              status: "degraded",
+              mode: "heuristic_fallback",
+            },
           },
         }),
         { status: 503, headers: { "content-type": "application/json" } },
@@ -64,7 +68,7 @@ test("claims health check returns failure details for degraded responses", async
   assert.equal(result.status, 503);
   assert.equal(
     result.summary,
-    "Claims health check failed with 503 | status=degraded | 2 stale processing claims across 1 organizations | 3 due outbox rows (oldest 18m)",
+    "Claims health check failed with 503 | status=degraded | 2 stale processing claims across 1 organizations | 3 due outbox rows (oldest 18m) | extraction=heuristic_fallback",
   );
 });
 

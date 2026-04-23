@@ -22,13 +22,10 @@ type ClaimsHealthRouteDependencies = {
   isProcessingWatchdogEnabledFn?: typeof isClaimsProcessingWatchdogEnabled;
 };
 
-export function createClaimsHealthHandler(
-  dependencies: ClaimsHealthRouteDependencies = {},
-) {
+export function createClaimsHealthHandler(dependencies: ClaimsHealthRouteDependencies = {}) {
   const loadClaimsOperationsHealthSnapshotFn =
     dependencies.loadClaimsOperationsHealthSnapshotFn ?? loadClaimsOperationsHealthSnapshot;
-  const captureWebExceptionFn =
-    dependencies.captureWebExceptionFn ?? captureWebException;
+  const captureWebExceptionFn = dependencies.captureWebExceptionFn ?? captureWebException;
   const logErrorFn = dependencies.logErrorFn ?? logError;
   const nowFn = dependencies.nowFn ?? (() => new Date());
   const getBearerTokenFn = dependencies.getBearerTokenFn ?? getClaimsHealthBearerToken;
@@ -43,10 +40,7 @@ export function createClaimsHealthHandler(
   return async function GET(request: Request): Promise<Response> {
     const expectedToken = getBearerTokenFn();
     if (!expectedToken) {
-      return Response.json(
-        { error: "Claims health endpoint is not configured" },
-        { status: 503 },
-      );
+      return Response.json({ error: "Claims health endpoint is not configured" }, { status: 503 });
     }
 
     const headerValue = request.headers.get("authorization");
@@ -77,8 +71,11 @@ export function createClaimsHealthHandler(
         summary.staleProcessingCount > maxStaleProcessingCount ? "degraded" : "ok";
       const ingestQueueOutboxStatus =
         summary.ingestQueueOutbox.dueCount > maxDueOutboxCount ? "degraded" : "ok";
+      const extractionStatus = summary.extractionConfig.openAiConfigured ? "ok" : "degraded";
       const overallStatus =
-        staleProcessingStatus === "degraded" || ingestQueueOutboxStatus === "degraded"
+        staleProcessingStatus === "degraded" ||
+        ingestQueueOutboxStatus === "degraded" ||
+        extractionStatus === "degraded"
           ? "degraded"
           : "ok";
 
@@ -91,6 +88,7 @@ export function createClaimsHealthHandler(
             statusCounts: summary.statusCounts,
             staleProcessingCount: summary.staleProcessingCount,
             staleProcessingOrganizationCount: summary.staleProcessingOrganizationCount,
+            extractionConfig: summary.extractionConfig,
             operationalActivity: summary.operationalActivity,
             ingestQueueOutbox: summary.ingestQueueOutbox,
           },
@@ -109,6 +107,12 @@ export function createClaimsHealthHandler(
               threshold: maxDueOutboxCount,
               oldestPendingAgeMinutes: summary.ingestQueueOutbox.oldestPendingAgeMinutes,
               oldestDueAgeMinutes: summary.ingestQueueOutbox.oldestDueAgeMinutes,
+            },
+            extraction: {
+              status: extractionStatus,
+              mode: summary.extractionConfig.mode,
+              openAiConfigured: summary.extractionConfig.openAiConfigured,
+              heuristicFallbackAllowed: summary.extractionConfig.heuristicFallbackAllowed,
             },
             processingWatchdog: {
               enabled: processingWatchdogEnabled,

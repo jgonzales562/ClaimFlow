@@ -49,6 +49,11 @@ type ParsedFormLoginRequest = {
   redirectTo: string | null;
 };
 
+type SingleMembershipSelection =
+  | { kind: "missing" }
+  | { kind: "multiple" }
+  | { kind: "single"; membership: LoginMembershipRecord };
+
 export function createLoginHandler(dependencies: LoginDependencies = {}) {
   const findUserByEmailFn =
     dependencies.findUserByEmailFn ??
@@ -84,7 +89,8 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
     dependencies.getSessionCookieOptionsFn ?? getSessionCookieOptions;
 
   return async function POST(request: Request): Promise<Response> {
-    const isJsonRequest = request.headers.get("content-type")?.includes("application/json") ?? false;
+    const isJsonRequest =
+      request.headers.get("content-type")?.includes("application/json") ?? false;
     const formRequest = isJsonRequest ? null : await parseFormLoginRequest(request);
 
     const credentials = isJsonRequest
@@ -103,7 +109,7 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
     }
 
     const email = credentials.email.toLowerCase().trim();
-    const password = credentials.password.trim();
+    const password = credentials.password;
 
     const user = await findUserByEmailFn(email);
 
@@ -120,8 +126,8 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
         : buildLoginErrorRedirect(request, "invalid_credentials", formRequest?.redirectTo);
     }
 
-    const membership = user.memberships[0];
-    if (!membership) {
+    const membershipSelection = selectSingleMembership(user.memberships);
+    if (membershipSelection.kind === "missing") {
       return isJsonRequest
         ? Response.json(
             { error: "User has no organization membership. Contact an administrator." },
@@ -130,14 +136,13 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
         : buildLoginErrorRedirect(request, "no_membership", formRequest?.redirectTo);
     }
 
-    if (user.memberships.length > 1) {
+    if (membershipSelection.kind === "multiple") {
       return isJsonRequest
-        ? Response.json(
-            { error: MULTIPLE_MEMBERSHIPS_MESSAGE },
-            { status: 409 },
-          )
+        ? Response.json({ error: MULTIPLE_MEMBERSHIPS_MESSAGE }, { status: 409 })
         : buildLoginErrorRedirect(request, "multiple_memberships", formRequest?.redirectTo);
     }
+
+    const membership = membershipSelection.membership;
 
     if (!isMembershipRole(membership.role)) {
       return isJsonRequest
@@ -179,7 +184,8 @@ export function createLogoutHandler(dependencies: LogoutDependencies = {}) {
     dependencies.getExpiredSessionCookieOptionsFn ?? getExpiredSessionCookieOptions;
 
   return async function POST(request: Request): Promise<Response> {
-    const isJsonRequest = request.headers.get("content-type")?.includes("application/json") ?? false;
+    const isJsonRequest =
+      request.headers.get("content-type")?.includes("application/json") ?? false;
 
     const response = isJsonRequest
       ? Response.json({ ok: true })
@@ -202,8 +208,8 @@ async function parseJsonCredentials(
       return null;
     }
 
-    const email = readCredentialField(body, "email");
-    const password = readCredentialField(body, "password");
+    const email = readJsonEmailField(body);
+    const password = readJsonPasswordField(body);
     return email && password ? { email, password } : null;
   } catch {
     return null;
@@ -214,8 +220,8 @@ async function parseFormLoginRequest(request: Request): Promise<ParsedFormLoginR
   try {
     const formData = await request.formData();
     return {
-      email: readFormStringField(formData.get("email")),
-      password: readFormStringField(formData.get("password")),
+      email: readFormEmailField(formData.get("email")),
+      password: readFormPasswordField(formData.get("password")),
       redirectTo: sanitizeLoginRedirectTarget(formData.get("redirect")),
     };
   } catch {
@@ -223,25 +229,71 @@ async function parseFormLoginRequest(request: Request): Promise<ParsedFormLoginR
   }
 }
 
-function readCredentialField(value: unknown, field: "email" | "password"): string | null {
-  if (!(field in (value as Record<string, unknown>))) {
+function readJsonEmailField(value: unknown): string | null {
+  return readJsonStringField(value, "email", { trim: true });
+}
+
+function readJsonPasswordField(value: unknown): string | null {
+  return readJsonStringField(value, "password", { trim: false });
+}
+
+function readJsonStringField(
+  value: unknown,
+  field: "email" | "password",
+  options: { trim: boolean },
+): string | null {
+  if (typeof value !== "object" || value === null || !(field in value)) {
     return null;
   }
 
   const fieldValue = (value as Record<string, unknown>)[field];
-  if (typeof fieldValue !== "string" || !fieldValue.trim()) {
+  if (typeof fieldValue !== "string") {
     return null;
   }
 
-  return fieldValue;
+  if (options.trim) {
+    return fieldValue.trim() ? fieldValue : null;
+  }
+
+  return fieldValue.length > 0 ? fieldValue : null;
 }
 
-function readFormStringField(value: FormDataEntryValue | null): string | null {
-  if (typeof value !== "string" || !value.trim()) {
+function readFormEmailField(value: FormDataEntryValue | null): string | null {
+  return readFormStringField(value, { trim: true });
+}
+
+function readFormPasswordField(value: FormDataEntryValue | null): string | null {
+  return readFormStringField(value, { trim: false });
+}
+
+function readFormStringField(
+  value: FormDataEntryValue | null,
+  options: { trim: boolean },
+): string | null {
+  if (typeof value !== "string") {
     return null;
   }
 
-  return value;
+  if (options.trim) {
+    return value.trim() ? value : null;
+  }
+
+  return value.length > 0 ? value : null;
+}
+
+function selectSingleMembership(memberships: LoginMembershipRecord[]): SingleMembershipSelection {
+  if (memberships.length === 0) {
+    return { kind: "missing" };
+  }
+
+  if (memberships.length > 1) {
+    return { kind: "multiple" };
+  }
+
+  return {
+    kind: "single",
+    membership: memberships[0],
+  };
 }
 
 function sanitizeLoginRedirectTarget(value: FormDataEntryValue | null): string | null {
@@ -289,7 +341,12 @@ function redirectResponse(url: URL, status: 303): Response {
 }
 
 function serializeCookie(name: string, value: string, options: CookieOptions): string {
-  const segments = [`${name}=${encodeURIComponent(value)}`, `Path=${options.path}`, `Max-Age=${options.maxAge}`, "HttpOnly"];
+  const segments = [
+    `${name}=${encodeURIComponent(value)}`,
+    `Path=${options.path}`,
+    `Max-Age=${options.maxAge}`,
+    "HttpOnly",
+  ];
 
   if (options.sameSite) {
     segments.push(`SameSite=${capitalizeToken(options.sameSite)}`);

@@ -70,6 +70,39 @@ test("dashboard review action redirects to no_changes without revalidation", asy
   assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
 });
 
+test("dashboard review action stays terminal when the auth redirect helper returns", async () => {
+  const redirectLocations: string[] = [];
+  const harness = createHarness({
+    getAuthContextFn: async () => null,
+    redirectFn: (location: string) => {
+      redirectLocations.push(location);
+    },
+  });
+
+  await harness.handlers.updateClaimReviewAction(buildReviewFormData());
+
+  assert.deepEqual(redirectLocations, ["/login?redirect=%2Fdashboard%2Fclaims%2Fclaim-1"]);
+  assert.equal(harness.updateCalls.length, 0);
+  assert.deepEqual(harness.revalidatedPaths, []);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
+});
+
+test("dashboard review action stays terminal when a result redirect helper returns", async () => {
+  const redirectLocations: string[] = [];
+  const harness = createHarness({
+    redirectFn: (location: string) => {
+      redirectLocations.push(location);
+    },
+    updateClaimReviewFn: async () => ({ kind: "no_changes", claimId: "claim-1" }),
+  });
+
+  await harness.handlers.updateClaimReviewAction(buildReviewFormData());
+
+  assert.deepEqual(redirectLocations, ["/dashboard/claims/claim-1?notice=no_changes"]);
+  assert.deepEqual(harness.revalidatedPaths, []);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
+});
+
 test("dashboard review action revalidates and redirects on success", async () => {
   const harness = createHarness({
     updateClaimReviewFn: async (input) => {
@@ -131,7 +164,10 @@ test("dashboard status action redirects invalid transitions", async () => {
 
 test("dashboard status action redirects unchanged statuses", async () => {
   const harness = createHarness({
-    transitionDashboardClaimStatusFn: async () => ({ kind: "status_unchanged", claimId: "claim-1" }),
+    transitionDashboardClaimStatusFn: async () => ({
+      kind: "status_unchanged",
+      claimId: "claim-1",
+    }),
   });
 
   await expectRedirect(
@@ -272,7 +308,9 @@ const DEFAULT_AUTH = {
   role: "ANALYST" as const,
 };
 
-function createHarness(overrides: Partial<Parameters<typeof createDashboardClaimActionHandlers>[0]> = {}) {
+function createHarness(
+  overrides: Partial<Parameters<typeof createDashboardClaimActionHandlers>[0]> = {},
+) {
   const revalidatedPaths: string[] = [];
   const revalidatedSummaryOrganizations: string[] = [];
   const updateCalls: Array<Record<string, unknown>> = [];
@@ -282,22 +320,30 @@ function createHarness(overrides: Partial<Parameters<typeof createDashboardClaim
 
   const handlers = createDashboardClaimActionHandlers({
     getAuthContextFn: overrides.getAuthContextFn ?? (async () => DEFAULT_AUTH),
-    hasMinimumRoleFn: overrides.hasMinimumRoleFn ?? ((currentRole, requiredRole) => rankRole(currentRole) >= rankRole(requiredRole)),
-    redirectFn: overrides.redirectFn ?? ((location: string): never => {
-      throw new RedirectSignal(location);
-    }),
-    revalidatePathFn: overrides.revalidatePathFn ?? ((path: string) => {
-      revalidatedPaths.push(path);
-    }),
+    hasMinimumRoleFn:
+      overrides.hasMinimumRoleFn ??
+      ((currentRole, requiredRole) => rankRole(currentRole) >= rankRole(requiredRole)),
+    redirectFn:
+      overrides.redirectFn ??
+      ((location: string): never => {
+        throw new RedirectSignal(location);
+      }),
+    revalidatePathFn:
+      overrides.revalidatePathFn ??
+      ((path: string) => {
+        revalidatedPaths.push(path);
+      }),
     revalidateDashboardSummaryCacheFn:
       overrides.revalidateDashboardSummaryCacheFn ??
       ((organizationId: string) => {
         revalidatedSummaryOrganizations.push(organizationId);
       }),
-    updateClaimReviewFn: overrides.updateClaimReviewFn ?? (async (input) => {
-      updateCalls.push(input as unknown as Record<string, unknown>);
-      return { kind: "updated", claimId: input.claimId, changedFields: [] };
-    }),
+    updateClaimReviewFn:
+      overrides.updateClaimReviewFn ??
+      (async (input) => {
+        updateCalls.push(input as unknown as Record<string, unknown>);
+        return { kind: "updated", claimId: input.claimId, changedFields: [] };
+      }),
     transitionDashboardClaimStatusFn:
       overrides.transitionDashboardClaimStatusFn ??
       (async (input) => {
@@ -397,10 +443,7 @@ function buildProcessingRecoveryFormData(
   return formData;
 }
 
-async function expectRedirect(
-  run: () => Promise<void>,
-  expectedLocation: string,
-): Promise<void> {
+async function expectRedirect(run: () => Promise<void>, expectedLocation: string): Promise<void> {
   await assert.rejects(run, (error: unknown) => {
     assert.equal(error instanceof RedirectSignal, true);
     assert.equal((error as RedirectSignal).location, expectedLocation);

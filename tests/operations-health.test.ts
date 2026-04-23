@@ -2,7 +2,10 @@ import { after, test } from "node:test";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { prisma } from "../packages/db/src/index.ts";
-import { loadClaimsOperationsHealthSnapshot } from "../apps/web/lib/claims/operations-health.ts";
+import {
+  getClaimsExtractionConfiguration,
+  loadClaimsOperationsHealthSnapshot,
+} from "../apps/web/lib/claims/operations-health.ts";
 
 after(async () => {
   await prisma.$disconnect();
@@ -124,8 +127,7 @@ test("claims operations health aggregates stale processing and recent recovery a
     assert.deepEqual(snapshot.operationalActivity, {
       windowHours: 24,
       watchdogRecoveryCount: baseline.operationalActivity.watchdogRecoveryCount + 1,
-      manualProcessingRecoveryCount:
-        baseline.operationalActivity.manualProcessingRecoveryCount + 1,
+      manualProcessingRecoveryCount: baseline.operationalActivity.manualProcessingRecoveryCount + 1,
       manualRetryCount: baseline.operationalActivity.manualRetryCount + 1,
     });
     assert.equal(
@@ -138,6 +140,23 @@ test("claims operations health aggregates stale processing and recent recovery a
   } finally {
     await Promise.all([firstOrg.cleanup(), secondOrg.cleanup()]);
   }
+});
+
+test("claims operations health reports heuristic fallback extraction mode from env", () => {
+  withEnv(
+    {
+      NODE_ENV: "production",
+      OPENAI_API_KEY: undefined,
+      CLAIMS_ALLOW_HEURISTIC_FALLBACK: "true",
+    },
+    () => {
+      assert.deepEqual(getClaimsExtractionConfiguration(), {
+        mode: "heuristic_fallback",
+        openAiConfigured: false,
+        heuristicFallbackAllowed: true,
+      });
+    },
+  );
 });
 
 async function createOperationsHealthFixture(label: string) {
@@ -229,4 +248,29 @@ async function createOutboxEntry(input: {
       createdAt: input.createdAt,
     },
   });
+}
+
+function withEnv(overrides: Record<string, string | undefined>, run: () => void): void {
+  const previousValues = new Map<string, string | undefined>();
+
+  for (const [key, value] of Object.entries(overrides)) {
+    previousValues.set(key, process.env[key]);
+    if (typeof value === "undefined") {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    run();
+  } finally {
+    for (const [key, value] of previousValues) {
+      if (typeof value === "undefined") {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }

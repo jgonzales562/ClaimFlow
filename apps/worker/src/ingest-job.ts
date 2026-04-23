@@ -387,6 +387,10 @@ function choosePreferredExtraction(
   return primary;
 }
 
+const EXTRACTION_QUALITY_CONFIDENCE_WEIGHT = 100;
+const EXTRACTION_QUALITY_POPULATED_FIELD_WEIGHT = 4;
+const EXTRACTION_QUALITY_MISSING_INFO_WEIGHT = 3;
+
 function extractionQualityScore(result: ClaimExtractionResult): number {
   const extracted = result.extraction;
   const populatedFields = [
@@ -398,7 +402,12 @@ function extractionQualityScore(result: ClaimExtractionResult): number {
     extracted.retailer,
   ].filter((value) => Boolean(value)).length;
 
-  return extracted.confidence * 100 + populatedFields * 4 - extracted.missingInfo.length * 3;
+  // Prefer higher-confidence extractions first, then fuller payloads, while penalizing gaps.
+  return (
+    extracted.confidence * EXTRACTION_QUALITY_CONFIDENCE_WEIGHT +
+    populatedFields * EXTRACTION_QUALITY_POPULATED_FIELD_WEIGHT -
+    extracted.missingInfo.length * EXTRACTION_QUALITY_MISSING_INFO_WEIGHT
+  );
 }
 
 function getInboundTextCharCount(input: {

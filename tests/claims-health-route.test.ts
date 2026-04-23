@@ -46,6 +46,11 @@ test("claims health returns an ok snapshot for authorized monitors", async () =>
       },
       staleProcessingCount: 2,
       staleProcessingOrganizationCount: 1,
+      extractionConfig: {
+        mode: "openai",
+        openAiConfigured: true,
+        heuristicFallbackAllowed: false,
+      },
       operationalActivity: {
         windowHours: 24,
         watchdogRecoveryCount: 3,
@@ -87,6 +92,11 @@ test("claims health returns an ok snapshot for authorized monitors", async () =>
       },
       staleProcessingCount: 2,
       staleProcessingOrganizationCount: 1,
+      extractionConfig: {
+        mode: "openai",
+        openAiConfigured: true,
+        heuristicFallbackAllowed: false,
+      },
       operationalActivity: {
         windowHours: 24,
         watchdogRecoveryCount: 3,
@@ -118,6 +128,12 @@ test("claims health returns an ok snapshot for authorized monitors", async () =>
         oldestPendingAgeMinutes: 4,
         oldestDueAgeMinutes: 2,
       },
+      extraction: {
+        status: "ok",
+        mode: "openai",
+        openAiConfigured: true,
+        heuristicFallbackAllowed: false,
+      },
       processingWatchdog: {
         enabled: true,
       },
@@ -143,6 +159,11 @@ test("claims health returns 503 when stale processing breaches the threshold", a
       },
       staleProcessingCount: 1,
       staleProcessingOrganizationCount: 1,
+      extractionConfig: {
+        mode: "openai",
+        openAiConfigured: true,
+        heuristicFallbackAllowed: false,
+      },
       operationalActivity: {
         windowHours: 24,
         watchdogRecoveryCount: 0,
@@ -187,8 +208,93 @@ test("claims health returns 503 when stale processing breaches the threshold", a
       oldestPendingAgeMinutes: 30,
       oldestDueAgeMinutes: 12,
     },
+    extraction: {
+      status: "ok",
+      mode: "openai",
+      openAiConfigured: true,
+      heuristicFallbackAllowed: false,
+    },
     processingWatchdog: {
       enabled: false,
+    },
+  });
+});
+
+test("claims health returns 503 when heuristic fallback mode is active", async () => {
+  const handler = createClaimsHealthHandler({
+    getBearerTokenFn: () => "ops-secret-token",
+    getMaxDueOutboxCountFn: () => 0,
+    getMaxStaleProcessingCountFn: () => 0,
+    getStaleMinutesFn: () => 30,
+    isProcessingWatchdogEnabledFn: () => true,
+    loadClaimsOperationsHealthSnapshotFn: async () => ({
+      totalClaims: 3,
+      statusCounts: {
+        NEW: 1,
+        PROCESSING: 0,
+        REVIEW_REQUIRED: 1,
+        READY: 1,
+        ERROR: 0,
+      },
+      staleProcessingCount: 0,
+      staleProcessingOrganizationCount: 0,
+      extractionConfig: {
+        mode: "heuristic_fallback",
+        openAiConfigured: false,
+        heuristicFallbackAllowed: true,
+      },
+      operationalActivity: {
+        windowHours: 24,
+        watchdogRecoveryCount: 0,
+        manualProcessingRecoveryCount: 0,
+        manualRetryCount: 0,
+      },
+      ingestQueueOutbox: {
+        pendingCount: 0,
+        dueCount: 0,
+        oldestPendingAgeMinutes: null,
+        oldestPendingCreatedAt: null,
+        oldestDueAgeMinutes: null,
+        oldestDueAvailableAt: null,
+      },
+    }),
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/ops/claims/health", {
+      headers: {
+        authorization: "Bearer ops-secret-token",
+      },
+    }),
+  );
+
+  assert.equal(response.status, 503);
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.equal(body.status, "degraded");
+  assert.deepEqual(body.checks, {
+    staleProcessing: {
+      status: "ok",
+      observedCount: 0,
+      affectedOrganizations: 0,
+      threshold: 0,
+      staleAfterMinutes: 30,
+    },
+    ingestQueueOutbox: {
+      status: "ok",
+      pendingCount: 0,
+      dueCount: 0,
+      threshold: 0,
+      oldestPendingAgeMinutes: null,
+      oldestDueAgeMinutes: null,
+    },
+    extraction: {
+      status: "degraded",
+      mode: "heuristic_fallback",
+      openAiConfigured: false,
+      heuristicFallbackAllowed: true,
+    },
+    processingWatchdog: {
+      enabled: true,
     },
   });
 });

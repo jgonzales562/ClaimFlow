@@ -26,6 +26,7 @@ export type WorkerConfig = ClaimIngestJobConfig & {
   maxReceiveCount: number;
   idleDelayMs: number;
   errorDelayMs: number;
+  allowHeuristicFallback: boolean;
   sentryDsn: string | null;
   sentryEnvironment: string;
   sentryTracesSampleRate: number;
@@ -40,6 +41,18 @@ export function loadWorkerConfig(): WorkerConfig {
   const awsRegion = process.env.AWS_REGION?.trim();
   if (!awsRegion) {
     throw new Error("AWS_REGION is required for the worker.");
+  }
+
+  const openAiApiKey = optionalEnv("OPENAI_API_KEY");
+  const allowHeuristicFallback = parseBooleanEnv(
+    "CLAIMS_ALLOW_HEURISTIC_FALLBACK",
+    defaultAllowHeuristicFallback(),
+  );
+
+  if (!openAiApiKey && !allowHeuristicFallback) {
+    throw new Error(
+      "OPENAI_API_KEY is required unless CLAIMS_ALLOW_HEURISTIC_FALLBACK=true for this environment.",
+    );
   }
 
   return {
@@ -113,7 +126,8 @@ export function loadWorkerConfig(): WorkerConfig {
     maxReceiveCount: parseIntegerEnv("CLAIMS_QUEUE_MAX_RECEIVE_COUNT", 5, 1, 1000),
     idleDelayMs: parseIntegerEnv("CLAIMS_QUEUE_IDLE_DELAY_MS", 250, 0, 60_000),
     errorDelayMs: parseIntegerEnv("CLAIMS_QUEUE_ERROR_DELAY_MS", 2_000, 0, 60_000),
-    openAiApiKey: optionalEnv("OPENAI_API_KEY"),
+    openAiApiKey,
+    allowHeuristicFallback,
     extractionModel: optionalEnv("OPENAI_MODEL") ?? "gpt-4o-mini",
     extractionReadyConfidence: parseNumberEnv("CLAIMS_EXTRACTION_READY_CONFIDENCE", 0.85, 0, 1),
     extractionMaxInputChars: parseIntegerEnv(
@@ -212,4 +226,9 @@ function parseBooleanEnv(name: string, fallback: boolean): boolean {
 function optionalEnv(name: string): string | null {
   const value = process.env[name]?.trim();
   return value ? value : null;
+}
+
+function defaultAllowHeuristicFallback(): boolean {
+  const nodeEnv = process.env.NODE_ENV?.trim().toLowerCase();
+  return !nodeEnv || nodeEnv === "development" || nodeEnv === "test";
 }

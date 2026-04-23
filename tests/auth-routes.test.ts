@@ -53,6 +53,32 @@ test("login JSON rejects invalid credentials", async () => {
   assert.deepEqual(await response.json(), { error: "Invalid email or password." });
 });
 
+test("login JSON preserves leading and trailing spaces in passwords", async () => {
+  let receivedPassword: string | null = null;
+  const handler = createLoginHandler({
+    findUserByEmailFn: async () => ({ ...baseUser }),
+    verifyPasswordFn: async (password) => {
+      receivedPassword = password;
+      return password === "  correct-password  ";
+    },
+    createSessionTokenFn: () => "session-token-value",
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "analyst@example.com",
+        password: "  correct-password  ",
+      }),
+    }),
+  );
+
+  assert.equal(response.status, 200);
+  assert.equal(receivedPassword, "  correct-password  ");
+});
+
 test("login form redirects invalid credentials back to the login page", async () => {
   const handler = createLoginHandler({
     findUserByEmailFn: async () => null,
@@ -70,7 +96,10 @@ test("login form redirects invalid credentials back to the login page", async ()
   );
 
   assert.equal(response.status, 303);
-  assert.equal(response.headers.get("location"), "http://localhost/login?error=invalid_credentials");
+  assert.equal(
+    response.headers.get("location"),
+    "http://localhost/login?error=invalid_credentials",
+  );
 });
 
 test("login form preserves a validated redirect target when credentials are rejected", async () => {

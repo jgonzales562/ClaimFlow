@@ -2,11 +2,13 @@ import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { captureWebException } from "@/lib/observability/sentry";
 import { extractErrorMessage, logError, logInfo } from "@/lib/observability/log";
 import { loadDashboardOperationalSummary } from "./dashboard-claims";
+import { getClaimsExtractionConfiguration } from "./operations-health";
 
 type ClaimsOperationsRouteDependencies = {
   getAuthContextFn?: typeof getAuthContext;
   loadDashboardOperationalSummaryFn?: typeof loadDashboardOperationalSummary;
   captureWebExceptionFn?: typeof captureWebException;
+  getExtractionConfigurationFn?: typeof getClaimsExtractionConfiguration;
   logInfoFn?: typeof logInfo;
   logErrorFn?: typeof logError;
   nowFn?: () => Date;
@@ -18,8 +20,9 @@ export function createClaimsOperationsHandler(
   const getAuthContextFn = dependencies.getAuthContextFn ?? getAuthContext;
   const loadDashboardOperationalSummaryFn =
     dependencies.loadDashboardOperationalSummaryFn ?? loadDashboardOperationalSummary;
-  const captureWebExceptionFn =
-    dependencies.captureWebExceptionFn ?? captureWebException;
+  const captureWebExceptionFn = dependencies.captureWebExceptionFn ?? captureWebException;
+  const getExtractionConfigurationFn =
+    dependencies.getExtractionConfigurationFn ?? getClaimsExtractionConfiguration;
   const logInfoFn = dependencies.logInfoFn ?? logInfo;
   const logErrorFn = dependencies.logErrorFn ?? logError;
   const nowFn = dependencies.nowFn ?? (() => new Date());
@@ -36,6 +39,7 @@ export function createClaimsOperationsHandler(
 
     try {
       const generatedAt = nowFn();
+      const extractionConfig = getExtractionConfigurationFn();
       const summary = await loadDashboardOperationalSummaryFn({
         organizationId: auth.organizationId,
         now: generatedAt,
@@ -50,6 +54,9 @@ export function createClaimsOperationsHandler(
         watchdogRecoveryCount: summary.operationalActivity.watchdogRecoveryCount,
         manualProcessingRecoveryCount: summary.operationalActivity.manualProcessingRecoveryCount,
         manualRetryCount: summary.operationalActivity.manualRetryCount,
+        extractionMode: extractionConfig.mode,
+        openAiConfigured: extractionConfig.openAiConfigured,
+        heuristicFallbackAllowed: extractionConfig.heuristicFallbackAllowed,
       });
 
       return Response.json({
@@ -59,6 +66,7 @@ export function createClaimsOperationsHandler(
         totalClaims: summary.totalClaims,
         statusCounts: summary.statusCounts,
         staleProcessingCount: summary.staleProcessingCount,
+        extractionConfig,
         operationalActivity: summary.operationalActivity,
         ingestQueueOutbox: summary.ingestQueueOutbox,
       });

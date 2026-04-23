@@ -39,6 +39,11 @@ test("claims operations returns a machine-readable snapshot", async () => {
   const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
   const handler = createClaimsOperationsHandler({
     getAuthContextFn: async () => ADMIN_AUTH,
+    getExtractionConfigurationFn: () => ({
+      mode: "openai" as const,
+      openAiConfigured: true,
+      heuristicFallbackAllowed: false,
+    }),
     loadDashboardOperationalSummaryFn: async () => ({
       totalClaims: 42,
       statusCounts: {
@@ -87,6 +92,11 @@ test("claims operations returns a machine-readable snapshot", async () => {
       ERROR: 6,
     },
     staleProcessingCount: 3,
+    extractionConfig: {
+      mode: "openai",
+      openAiConfigured: true,
+      heuristicFallbackAllowed: false,
+    },
     operationalActivity: {
       windowHours: 24,
       watchdogRecoveryCount: 2,
@@ -114,6 +124,9 @@ test("claims operations returns a machine-readable snapshot", async () => {
         watchdogRecoveryCount: 2,
         manualProcessingRecoveryCount: 1,
         manualRetryCount: 4,
+        extractionMode: "openai",
+        openAiConfigured: true,
+        heuristicFallbackAllowed: false,
       },
     },
   ]);

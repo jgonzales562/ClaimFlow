@@ -3,10 +3,7 @@ import { pathToFileURL } from "node:url";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
-export async function executeClaimsHealthCheck({
-  fetchFn = fetch,
-  env = process.env,
-} = {}) {
+export async function executeClaimsHealthCheck({ fetchFn = fetch, env = process.env } = {}) {
   const healthUrl = readRequiredEnv(env, "CLAIMS_HEALTHCHECK_URL");
   const bearerToken = readRequiredEnv(env, "CLAIMS_HEALTH_BEARER_TOKEN");
   const timeoutMs = parseTimeoutMs(env.CLAIMS_HEALTHCHECK_TIMEOUT_MS);
@@ -57,6 +54,8 @@ export function buildSummary(status, body, fallbackText = "") {
     "ingestQueueOutbox",
     "oldestDueAgeMinutes",
   ]);
+  const extractionStatus = readString(body, ["checks", "extraction", "status"]);
+  const extractionMode = readString(body, ["checks", "extraction", "mode"]);
   const overallStatus = readString(body, ["status"]);
 
   if (status >= 200 && status < 300) {
@@ -64,6 +63,7 @@ export function buildSummary(status, body, fallbackText = "") {
       "Claims health OK",
       formatStaleCounts(staleProcessing, affectedOrganizations),
       formatOutboxCounts(dueOutboxCount, oldestDueOutboxAgeMinutes),
+      formatExtraction(extractionStatus, extractionMode),
       overallStatus ? `status=${overallStatus}` : null,
     ]
       .filter(Boolean)
@@ -76,6 +76,7 @@ export function buildSummary(status, body, fallbackText = "") {
     overallStatus ? `status=${overallStatus}` : null,
     formatStaleCounts(staleProcessing, affectedOrganizations),
     formatOutboxCounts(dueOutboxCount, oldestDueOutboxAgeMinutes),
+    formatExtraction(extractionStatus, extractionMode),
     errorMessage,
     !body && fallbackText ? fallbackText.trim().slice(0, 200) : null,
   ]
@@ -105,6 +106,18 @@ function formatOutboxCounts(dueOutboxCount, oldestDueOutboxAgeMinutes) {
   }
 
   return `${dueOutboxCount} due outbox rows`;
+}
+
+function formatExtraction(extractionStatus, extractionMode) {
+  if (!extractionStatus || !extractionMode) {
+    return null;
+  }
+
+  if (extractionStatus === "ok" && extractionMode === "openai") {
+    return null;
+  }
+
+  return `extraction=${extractionMode}`;
 }
 
 function readRequiredEnv(env, name) {

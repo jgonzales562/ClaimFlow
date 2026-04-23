@@ -83,16 +83,18 @@ export function getExpiredSessionCookieOptions() {
 }
 
 function getSessionSecret(): string {
-  const secret = process.env.SESSION_SECRET;
+  const secret = process.env.SESSION_SECRET?.trim();
   if (secret && secret.length >= 32) {
     return secret;
   }
 
-  if (process.env.NODE_ENV === "production") {
-    throw new Error("SESSION_SECRET must be set in production and at least 32 characters long.");
+  if (process.env.NODE_ENV === "test") {
+    return "test-only-insecure-session-secret-change-me";
   }
 
-  return "dev-only-insecure-session-secret-change-me-please";
+  throw new Error(
+    "SESSION_SECRET must be set in all non-test environments and at least 32 characters long.",
+  );
 }
 
 function signPayload(payload: string): string {

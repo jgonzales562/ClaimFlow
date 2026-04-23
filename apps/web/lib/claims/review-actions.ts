@@ -1,9 +1,6 @@
 import type { WarrantyStatus } from "@prisma/client";
 import { recoverStaleProcessingClaim as recoverStaleProcessingClaimService } from "./processing-recovery";
-import {
-  transitionDashboardClaimStatus,
-  updateClaimReview,
-} from "./review";
+import { transitionDashboardClaimStatus, updateClaimReview } from "./review";
 import { retryErroredClaim as retryErroredClaimService } from "./retry";
 
 const WARRANTY_STATUSES = ["LIKELY_IN_WARRANTY", "LIKELY_EXPIRED", "UNCLEAR"] as const;
@@ -18,7 +15,7 @@ type DashboardClaimActionAuthContext = {
 type DashboardClaimActionDependencies = {
   getAuthContextFn: () => Promise<DashboardClaimActionAuthContext | null>;
   hasMinimumRoleFn: (currentRole: MembershipRole, requiredRole: MembershipRole) => boolean;
-  redirectFn: (location: string) => never;
+  redirectFn: (location: string) => void;
   revalidatePathFn: (path: string) => void;
   revalidateDashboardSummaryCacheFn?: (organizationId: string) => void;
   updateClaimReviewFn?: typeof updateClaimReview;
@@ -42,15 +39,19 @@ export function createDashboardClaimActionHandlers(
   const recoverStaleProcessingClaimFn =
     dependencies.recoverStaleProcessingClaimFn ?? recoverStaleProcessingClaimService;
 
-  async function requireAnalystAuth(claimId: string): Promise<DashboardClaimActionAuthContext> {
+  async function requireAnalystAuth(
+    claimId: string,
+  ): Promise<DashboardClaimActionAuthContext | null> {
     const redirectTo = `/dashboard/claims/${claimId}`;
     const auth = await dependencies.getAuthContextFn();
     if (!auth) {
       dependencies.redirectFn(`/login?redirect=${encodeURIComponent(redirectTo)}`);
+      return null;
     }
 
     if (!dependencies.hasMinimumRoleFn(auth.role, "ANALYST")) {
       dependencies.redirectFn(`${redirectTo}?error=forbidden`);
+      return null;
     }
 
     return auth;
@@ -59,15 +60,18 @@ export function createDashboardClaimActionHandlers(
   async function updateClaimReviewAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
     const auth = await requireAnalystAuth(claimId);
+    if (!auth) {
+      return;
+    }
 
     const nextWarrantyStatus = parseWarrantyStatus(formData.get("warrantyStatus"));
     if (!nextWarrantyStatus) {
-      dependencies.redirectFn(`/dashboard/claims/${claimId}?error=invalid_warranty_status`);
+      return dependencies.redirectFn(`/dashboard/claims/${claimId}?error=invalid_warranty_status`);
     }
 
     const nextPurchaseDate = parseDateInput(formData.get("purchaseDate"));
     if (nextPurchaseDate === "INVALID") {
-      dependencies.redirectFn(`/dashboard/claims/${claimId}?error=invalid_purchase_date`);
+      return dependencies.redirectFn(`/dashboard/claims/${claimId}?error=invalid_purchase_date`);
     }
 
     const result = await updateClaimReviewFn({
@@ -87,26 +91,29 @@ export function createDashboardClaimActionHandlers(
     });
 
     if (result.kind === "claim_not_found") {
-      dependencies.redirectFn("/dashboard?error=claim_not_found");
+      return dependencies.redirectFn("/dashboard?error=claim_not_found");
     }
 
     if (result.kind === "no_changes") {
-      dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=no_changes`);
+      return dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=no_changes`);
     }
 
     dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
-    dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=claim_updated`);
+    return dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=claim_updated`);
   }
 
   async function transitionClaimStatusAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
     const auth = await requireAnalystAuth(claimId);
+    if (!auth) {
+      return;
+    }
 
     const targetStatus = parseStatusTransitionTarget(formData.get("targetStatus"));
     if (!targetStatus) {
-      dependencies.redirectFn(`/dashboard/claims/${claimId}?error=invalid_status_target`);
+      return dependencies.redirectFn(`/dashboard/claims/${claimId}?error=invalid_status_target`);
     }
 
     const result = await transitionDashboardClaimStatusFn({
@@ -117,26 +124,31 @@ export function createDashboardClaimActionHandlers(
     });
 
     if (result.kind === "claim_not_found") {
-      dependencies.redirectFn("/dashboard?error=claim_not_found");
+      return dependencies.redirectFn("/dashboard?error=claim_not_found");
     }
 
     if (result.kind === "status_unchanged") {
-      dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=status_unchanged`);
+      return dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=status_unchanged`);
     }
 
     if (result.kind === "invalid_transition") {
-      dependencies.redirectFn(`/dashboard/claims/${result.claimId}?error=invalid_status_transition`);
+      return dependencies.redirectFn(
+        `/dashboard/claims/${result.claimId}?error=invalid_status_transition`,
+      );
     }
 
     dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
-    dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=status_updated`);
+    return dependencies.redirectFn(`/dashboard/claims/${result.claimId}?notice=status_updated`);
   }
 
   async function retryClaimAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
     const auth = await requireAnalystAuth(claimId);
+    if (!auth) {
+      return;
+    }
     const returnTo = parseReturnTo(formData.get("returnTo"), `/dashboard/claims/${claimId}`);
 
     const result = await retryErroredClaimFn({
@@ -146,19 +158,23 @@ export function createDashboardClaimActionHandlers(
     });
 
     if (result.kind === "claim_not_found") {
-      dependencies.redirectFn("/dashboard?error=claim_not_found");
+      return dependencies.redirectFn("/dashboard?error=claim_not_found");
     }
 
     if (result.kind === "retry_not_allowed") {
-      dependencies.redirectFn(appendRedirectState(returnTo, "error", "claim_retry_not_allowed"));
+      return dependencies.redirectFn(
+        appendRedirectState(returnTo, "error", "claim_retry_not_allowed"),
+      );
     }
 
     if (result.kind === "retry_unavailable") {
-      dependencies.redirectFn(appendRedirectState(returnTo, "error", "claim_retry_unavailable"));
+      return dependencies.redirectFn(
+        appendRedirectState(returnTo, "error", "claim_retry_unavailable"),
+      );
     }
 
     if (result.kind === "queue_not_configured") {
-      dependencies.redirectFn(
+      return dependencies.redirectFn(
         appendRedirectState(returnTo, "error", "claim_retry_not_configured"),
       );
     }
@@ -167,12 +183,15 @@ export function createDashboardClaimActionHandlers(
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn("/dashboard/errors");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
-    dependencies.redirectFn(appendRedirectState(returnTo, "notice", "claim_retry_started"));
+    return dependencies.redirectFn(appendRedirectState(returnTo, "notice", "claim_retry_started"));
   }
 
   async function recoverProcessingAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
     const auth = await requireAnalystAuth(claimId);
+    if (!auth) {
+      return;
+    }
     const returnTo = parseReturnTo(formData.get("returnTo"), `/dashboard/claims/${claimId}`);
 
     const result = await recoverStaleProcessingClaimFn({
@@ -182,23 +201,23 @@ export function createDashboardClaimActionHandlers(
     });
 
     if (result.kind === "claim_not_found") {
-      dependencies.redirectFn("/dashboard?error=claim_not_found");
+      return dependencies.redirectFn("/dashboard?error=claim_not_found");
     }
 
     if (result.kind === "recovery_not_allowed") {
-      dependencies.redirectFn(
+      return dependencies.redirectFn(
         appendRedirectState(returnTo, "error", "claim_processing_recovery_not_allowed"),
       );
     }
 
     if (result.kind === "recovery_unavailable") {
-      dependencies.redirectFn(
+      return dependencies.redirectFn(
         appendRedirectState(returnTo, "error", "claim_processing_recovery_unavailable"),
       );
     }
 
     if (result.kind === "queue_not_configured") {
-      dependencies.redirectFn(
+      return dependencies.redirectFn(
         appendRedirectState(returnTo, "error", "claim_processing_recovery_not_configured"),
       );
     }
@@ -206,7 +225,7 @@ export function createDashboardClaimActionHandlers(
     dependencies.revalidateDashboardSummaryCacheFn?.(auth.organizationId);
     dependencies.revalidatePathFn("/dashboard");
     dependencies.revalidatePathFn(`/dashboard/claims/${result.claimId}`);
-    dependencies.redirectFn(
+    return dependencies.redirectFn(
       appendRedirectState(returnTo, "notice", "claim_processing_recovery_started"),
     );
   }
@@ -290,7 +309,9 @@ function parseMissingInfo(value: FormDataEntryValue | null): string[] {
   return Array.from(new Set(items)).slice(0, 20);
 }
 
-function parseStatusTransitionTarget(value: FormDataEntryValue | null): DashboardTransitionTarget | null {
+function parseStatusTransitionTarget(
+  value: FormDataEntryValue | null,
+): DashboardTransitionTarget | null {
   if (typeof value !== "string") {
     return null;
   }
@@ -316,11 +337,7 @@ function parseReturnTo(value: FormDataEntryValue | null, fallback: string): stri
   return trimmed;
 }
 
-function appendRedirectState(
-  path: string,
-  key: "notice" | "error",
-  value: string,
-): string {
+function appendRedirectState(path: string, key: "notice" | "error", value: string): string {
   const [pathname, existingQuery = ""] = path.split("?", 2);
   const params = new URLSearchParams(existingQuery);
   params.delete("notice");
