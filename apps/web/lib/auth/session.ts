@@ -1,7 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export const SESSION_COOKIE_NAME = "claimflow_session";
+export const PENDING_LOGIN_COOKIE_NAME = "claimflow_pending_login";
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7;
+const DEFAULT_PENDING_LOGIN_TTL_SECONDS = 60 * 5;
 
 export const MEMBERSHIP_ROLES = ["OWNER", "ADMIN", "ANALYST", "VIEWER"] as const;
 export type MembershipRole = (typeof MEMBERSHIP_ROLES)[number];
@@ -17,21 +19,84 @@ type SessionPayload = {
   exp: number;
 };
 
+type PendingLoginPayload = {
+  userId: string;
+  redirectTo: string | null;
+  exp: number;
+};
+
 export function createSessionToken(
   input: Omit<SessionPayload, "exp">,
   ttlSeconds = DEFAULT_SESSION_TTL_SECONDS,
 ): string {
-  const payload: SessionPayload = {
+  return createSignedToken({
     ...input,
     exp: Math.floor(Date.now() / 1000) + ttlSeconds,
-  };
+  });
+}
 
+export function verifySessionToken(token: string): SessionPayload | null {
+  return verifySignedToken(token, isSessionPayload);
+}
+
+export function createPendingLoginToken(
+  input: Omit<PendingLoginPayload, "exp">,
+  ttlSeconds = DEFAULT_PENDING_LOGIN_TTL_SECONDS,
+): string {
+  return createSignedToken({
+    ...input,
+    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+  });
+}
+
+export function verifyPendingLoginToken(token: string): PendingLoginPayload | null {
+  return verifySignedToken(token, isPendingLoginPayload);
+}
+
+export function getSessionCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/",
+    maxAge: DEFAULT_SESSION_TTL_SECONDS,
+  };
+}
+
+export function getPendingLoginCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: process.env.NODE_ENV === "production",
+    sameSite: "lax" as const,
+    path: "/",
+    maxAge: DEFAULT_PENDING_LOGIN_TTL_SECONDS,
+  };
+}
+
+export function getExpiredSessionCookieOptions() {
+  return {
+    ...getSessionCookieOptions(),
+    maxAge: 0,
+  };
+}
+
+export function getExpiredPendingLoginCookieOptions() {
+  return {
+    ...getPendingLoginCookieOptions(),
+    maxAge: 0,
+  };
+}
+
+function createSignedToken<TPayload extends { exp: number }>(payload: TPayload): string {
   const encodedPayload = toBase64Url(JSON.stringify(payload));
   const signature = signPayload(encodedPayload);
   return `${encodedPayload}.${signature}`;
 }
 
-export function verifySessionToken(token: string): SessionPayload | null {
+function verifySignedToken<TPayload extends { exp: number }>(
+  token: string,
+  isPayload: (payload: Partial<TPayload>) => payload is TPayload,
+): TPayload | null {
   const [encodedPayload, providedSignature] = token.split(".");
   if (!encodedPayload || !providedSignature) {
     return null;
@@ -50,8 +115,8 @@ export function verifySessionToken(token: string): SessionPayload | null {
   }
 
   try {
-    const payload = JSON.parse(fromBase64Url(encodedPayload)) as Partial<SessionPayload>;
-    if (!isSessionPayload(payload)) {
+    const payload = JSON.parse(fromBase64Url(encodedPayload)) as Partial<TPayload>;
+    if (!isPayload(payload)) {
       return null;
     }
 
@@ -63,23 +128,6 @@ export function verifySessionToken(token: string): SessionPayload | null {
   } catch {
     return null;
   }
-}
-
-export function getSessionCookieOptions() {
-  return {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax" as const,
-    path: "/",
-    maxAge: DEFAULT_SESSION_TTL_SECONDS,
-  };
-}
-
-export function getExpiredSessionCookieOptions() {
-  return {
-    ...getSessionCookieOptions(),
-    maxAge: 0,
-  };
 }
 
 function getSessionSecret(): string {
@@ -108,6 +156,20 @@ function toBase64Url(value: string): string {
 
 function fromBase64Url(value: string): string {
   return Buffer.from(value, "base64url").toString("utf8");
+}
+
+function isPendingLoginPayload(
+  payload: Partial<PendingLoginPayload>,
+): payload is PendingLoginPayload {
+  if (typeof payload !== "object" || payload === null) {
+    return false;
+  }
+
+  return (
+    typeof payload.userId === "string" &&
+    typeof payload.exp === "number" &&
+    (payload.redirectTo === null || typeof payload.redirectTo === "string")
+  );
 }
 
 function isSessionPayload(payload: Partial<SessionPayload>): payload is SessionPayload {

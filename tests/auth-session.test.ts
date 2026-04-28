@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createSessionToken, verifySessionToken } from "../apps/web/lib/auth/session.ts";
+import {
+  createPendingLoginToken,
+  createSessionToken,
+  verifyPendingLoginToken,
+  verifySessionToken,
+} from "../apps/web/lib/auth/session.ts";
 
 test("session tokens require SESSION_SECRET outside test environments", () => {
   withEnv(
@@ -40,6 +45,29 @@ test("session tokens use a test-only fallback secret when SESSION_SECRET is abse
         userId: "user-1",
         organizationId: "org-1",
         role: "ADMIN",
+        exp: payload?.exp,
+      });
+      assert.equal(typeof payload?.exp, "number");
+    },
+  );
+});
+
+test("pending login tokens round-trip redirect state with the same signing rules", () => {
+  withEnv(
+    {
+      NODE_ENV: "test",
+      SESSION_SECRET: undefined,
+    },
+    () => {
+      const token = createPendingLoginToken({
+        userId: "user-1",
+        redirectTo: "/dashboard/claims/claim-1?notice=resume",
+      });
+
+      const payload = verifyPendingLoginToken(token);
+      assert.deepEqual(payload, {
+        userId: "user-1",
+        redirectTo: "/dashboard/claims/claim-1?notice=resume",
         exp: payload?.exp,
       });
       assert.equal(typeof payload?.exp, "number");
