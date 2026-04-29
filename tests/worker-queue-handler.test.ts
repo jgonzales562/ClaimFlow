@@ -57,6 +57,46 @@ test("worker deletes source messages after successful claim processing", async (
   assert.equal(deleteCommands[0].input.ReceiptHandle, "receipt-success");
 });
 
+test("worker extends message visibility while long claim processing is running", async () => {
+  const queueMessage = buildQueueMessage();
+  const commands = createCommandRecorder();
+
+  await handleClaimQueueMessage(
+    {
+      config: {
+        queueUrl: "https://example.invalid/claims",
+        dlqUrl: "https://example.invalid/claims-dlq",
+        maxReceiveCount: 5,
+        visibilityTimeoutSeconds: 30,
+        visibilityExtensionIntervalMs: 1,
+      },
+      sqsClient: commands.client,
+      sqsMessage: buildSqsMessage({
+        Body: JSON.stringify(queueMessage),
+        ReceiptHandle: "receipt-long-running",
+      }),
+    },
+    {
+      processClaimIngestJobFn: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      },
+      markClaimAsErrorFn: async () => {
+        throw new Error("markClaimAsError should not be called on success");
+      },
+      logInfoFn: () => {},
+      logErrorFn: () => {},
+    },
+  );
+
+  const visibilityCommands = commands.sent.filter((command) =>
+    isCommand(command, "ChangeMessageVisibilityCommand"),
+  );
+  assert.ok(visibilityCommands.length >= 1);
+  assert.equal(visibilityCommands[0]?.input.QueueUrl, "https://example.invalid/claims");
+  assert.equal(visibilityCommands[0]?.input.ReceiptHandle, "receipt-long-running");
+  assert.equal(visibilityCommands[0]?.input.VisibilityTimeout, 30);
+});
+
 test("worker routes malformed message bodies to the DLQ when configured", async () => {
   const loggedErrorEvents: Array<{ event: string; context: Record<string, unknown> }> = [];
   const commands = createCommandRecorder();
@@ -297,11 +337,15 @@ function createCommandRecorder(options: { failDlqPublish?: boolean } = {}): {
   };
 }
 
-function isCommand(command: unknown, name: "DeleteMessageCommand" | "SendMessageCommand"): command is {
+function isCommand(
+  command: unknown,
+  name: "DeleteMessageCommand" | "SendMessageCommand" | "ChangeMessageVisibilityCommand",
+): command is {
   input: {
     QueueUrl?: string;
     ReceiptHandle?: string;
     MessageBody?: string;
+    VisibilityTimeout?: number;
   };
 } {
   return (

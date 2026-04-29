@@ -60,8 +60,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const selectOrgValue = Array.isArray(selectOrg) ? selectOrg[0] : selectOrg;
   const organizationSelection =
     selectOrgValue === "1" ? await resolveOrganizationSelectionState() : null;
-  const activeSelection =
-    organizationSelection?.kind === "ready" ? organizationSelection : null;
+  const activeSelection = organizationSelection?.kind === "ready" ? organizationSelection : null;
   const activeRedirect = activeSelection?.redirectTo ?? redirectValue;
   const noticeMessage = resolveNoticeMessage(
     organizationSelection?.kind === "expired" ? "selection_expired" : errorValue,
@@ -74,7 +73,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           <div className="login-hero-top">
             <div>
               <p className="eyebrow">Claims operations workspace</p>
-              <h1 className="login-lead">Secure access to intake, review, and exception handling.</h1>
+              <h1 className="login-lead">
+                Secure access to intake, review, and exception handling.
+              </h1>
               <p className="login-copy">
                 ClaimFlow is built for teams working live warranty queues. Access stays scoped to
                 organization membership, role permissions, and auditable workflow actions.
@@ -145,7 +146,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
               <form action="/api/auth/login" method="post" className="login-form">
                 <input type="hidden" name="intent" value="select_organization" />
-                {activeRedirect ? <input type="hidden" name="redirect" value={activeRedirect} /> : null}
+                {activeRedirect ? (
+                  <input type="hidden" name="redirect" value={activeRedirect} />
+                ) : null}
 
                 <div className="feature-list">
                   {activeSelection.organizations.map((organization) => (
@@ -180,7 +183,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           ) : (
             <>
               <form action="/api/auth/login" method="post" className="login-form">
-                {activeRedirect ? <input type="hidden" name="redirect" value={activeRedirect} /> : null}
+                {activeRedirect ? (
+                  <input type="hidden" name="redirect" value={activeRedirect} />
+                ) : null}
 
                 <label className="field-label">
                   <span>Email</span>
@@ -199,8 +204,8 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
               <div className="login-footer">
                 <p className="copy-reset subtle-text">
-                  Every manual edit, status transition, retry, and recovery action remains
-                  auditable after sign-in.
+                  Every manual edit, status transition, retry, and recovery action remains auditable
+                  after sign-in.
                 </p>
                 <p className="copy-reset">
                   <Link href="/" className="inline-link">
@@ -312,6 +317,10 @@ function resolveNoticeMessage(error: string | undefined): string | null {
 
   if (error === "selection_expired") {
     return "Your organization selection expired. Sign in again.";
+  }
+
+  if (error === "rate_limited") {
+    return "Too many sign-in attempts. Try again later.";
   }
 
   return "Invalid email or password.";

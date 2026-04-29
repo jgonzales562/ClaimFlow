@@ -96,6 +96,7 @@ export async function loadClaimDetail(input: {
     prisma.claimAttachment.findMany({
       where: {
         claimId: claim.id,
+        deletedAt: null,
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: CLAIM_DETAIL_ATTACHMENT_LIMIT,
@@ -145,6 +146,7 @@ export async function loadClaimDetail(input: {
       where: {
         claimId: claim.id,
         uploadStatus: "STORED",
+        deletedAt: null,
       },
     }),
   ]);

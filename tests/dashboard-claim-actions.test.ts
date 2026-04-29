@@ -35,6 +35,21 @@ test("dashboard review action redirects forbidden users", async () => {
   assert.equal(harness.updateCalls.length, 0);
 });
 
+test("dashboard actions reject failed same-origin checks before mutating", async () => {
+  const harness = createHarness({
+    assertSameOriginFn: async () => false,
+  });
+
+  await expectRedirect(
+    () => harness.handlers.updateClaimReviewAction(buildReviewFormData()),
+    "/dashboard/claims/claim-1?error=invalid_request",
+  );
+
+  assert.equal(harness.updateCalls.length, 0);
+  assert.deepEqual(harness.revalidatedPaths, []);
+  assert.deepEqual(harness.revalidatedSummaryOrganizations, []);
+});
+
 test("dashboard review action rejects invalid warranty status", async () => {
   const harness = createHarness();
   const formData = buildReviewFormData({ warrantyStatus: "invalid" });
@@ -338,6 +353,7 @@ function createHarness(
       ((organizationId: string) => {
         revalidatedSummaryOrganizations.push(organizationId);
       }),
+    assertSameOriginFn: overrides.assertSameOriginFn,
     updateClaimReviewFn:
       overrides.updateClaimReviewFn ??
       (async (input) => {

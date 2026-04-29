@@ -3,6 +3,7 @@ import { getAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { isInlinePreviewableAttachment } from "@/lib/attachments";
 import { extractErrorMessage, logError } from "@/lib/observability/log";
 import { captureWebException } from "@/lib/observability/sentry";
+import { recordWebAuditEvent } from "@/lib/security/audit";
 import { createSignedAttachmentAccessUrl } from "@/lib/storage/s3";
 
 type AttachmentDownloadDependencies = {
@@ -20,6 +21,7 @@ type AttachmentDownloadDependencies = {
     s3Key: string;
   } | null>;
   createSignedAttachmentAccessUrlFn?: typeof createSignedAttachmentAccessUrl;
+  recordAuditEventFn?: typeof recordWebAuditEvent;
   captureWebExceptionFn?: typeof captureWebException;
   logErrorFn?: typeof logError;
   getSignedUrlTtlSecondsFn?: () => number;
@@ -38,6 +40,7 @@ export function createAttachmentDownloadHandler(dependencies: AttachmentDownload
           id: input.attachmentId,
           claimId: input.claimId,
           organizationId: input.organizationId,
+          deletedAt: null,
         },
         select: {
           uploadStatus: true,
@@ -49,6 +52,7 @@ export function createAttachmentDownloadHandler(dependencies: AttachmentDownload
       }));
   const createSignedAttachmentAccessUrlFn =
     dependencies.createSignedAttachmentAccessUrlFn ?? createSignedAttachmentAccessUrl;
+  const recordAuditEventFn = dependencies.recordAuditEventFn ?? recordWebAuditEvent;
   const captureWebExceptionFn = dependencies.captureWebExceptionFn ?? captureWebException;
   const logErrorFn = dependencies.logErrorFn ?? logError;
   const getSignedUrlTtlSecondsFn =
@@ -67,7 +71,9 @@ export function createAttachmentDownloadHandler(dependencies: AttachmentDownload
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const disposition = parseRequestedDisposition(new URL(request.url).searchParams.get("disposition"));
+    const disposition = parseRequestedDisposition(
+      new URL(request.url).searchParams.get("disposition"),
+    );
 
     try {
       const attachment = await findAttachmentFn({
@@ -93,6 +99,19 @@ export function createAttachmentDownloadHandler(dependencies: AttachmentDownload
           { status: 409 },
         );
       }
+
+      await recordAuditEventFn({
+        organizationId: auth.organizationId,
+        actorUserId: auth.userId,
+        eventType: "ATTACHMENT_ACCESS",
+        payload: {
+          claimId: params.claimId,
+          attachmentId: params.attachmentId,
+          disposition,
+          contentType: attachment.contentType,
+          originalFilename: attachment.originalFilename,
+        },
+      });
 
       const signedUrl = await createSignedAttachmentAccessUrlFn({
         bucket: attachment.s3Bucket,

@@ -51,6 +51,11 @@ enum ClaimEventType {
   STATUS_TRANSITION
 }
 
+enum AuditEventType {
+  CLAIM_EXPORT
+  ATTACHMENT_ACCESS
+}
+
 model Organization {
   id                       String                    @id @default(cuid())
   name                     String
@@ -65,6 +70,7 @@ model Organization {
   claimAttachments         ClaimAttachment[]
   claimExtractions         ClaimExtraction[]
   claimEvents              ClaimEvent[]
+  auditEvents              AuditEvent[]
   claimIngestQueueOutbox   ClaimIngestQueueOutbox[]
 }
 
@@ -91,6 +97,7 @@ model User {
   memberships   Membership[]
   createdClaims Claim[]      @relation("ClaimCreatedBy")
   claimEvents   ClaimEvent[] @relation("ClaimEventActor")
+  auditEvents   AuditEvent[] @relation("AuditEventActor")
 }
 
 model Membership {
@@ -209,6 +216,8 @@ model InboundMessage {
   /// Version for our stored provider payload contract.
   rawPayloadSchemaVersion Int                  @default(1)
   rawPayload              Json
+  rawPayloadRedactedAt    DateTime?
+  retentionExpiresAt      DateTime?
   claimId                 String?
   createdAt               DateTime             @default(now())
   organization            Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -218,51 +227,58 @@ model InboundMessage {
 
   @@unique([organizationId, provider, providerMessageId])
   @@index([organizationId, createdAt])
+  @@index([retentionExpiresAt, rawPayloadRedactedAt], map: "InboundMessage_retention_redaction_idx")
   @@index([claimId, createdAt], map: "InboundMessage_claimId_createdAt_idx")
 }
 
 model ClaimAttachment {
-  id               String                    @id @default(cuid())
-  organizationId   String
-  claimId          String
-  inboundMessageId String?
-  storageProvider  AttachmentStorageProvider @default(S3)
-  uploadStatus     AttachmentUploadStatus    @default(STORED)
-  originalFilename String
-  contentType      String?
-  byteSize         Int
-  checksumSha256   String?
-  s3Bucket         String
-  s3Key            String
-  errorMessage     String?
-  createdAt        DateTime                  @default(now())
-  organization     Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  claim            Claim                     @relation(fields: [claimId], references: [id], onDelete: Cascade)
-  inboundMessage   InboundMessage?           @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
+  id                 String                    @id @default(cuid())
+  organizationId     String
+  claimId            String
+  inboundMessageId   String?
+  storageProvider    AttachmentStorageProvider @default(S3)
+  uploadStatus       AttachmentUploadStatus    @default(STORED)
+  originalFilename   String
+  contentType        String?
+  byteSize           Int
+  checksumSha256     String?
+  s3Bucket           String
+  s3Key              String
+  errorMessage       String?
+  deletedAt          DateTime?
+  retentionExpiresAt DateTime?
+  createdAt          DateTime                  @default(now())
+  organization       Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim              Claim                     @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  inboundMessage     InboundMessage?           @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
+  @@index([retentionExpiresAt, deletedAt], map: "ClaimAttachment_retention_delete_idx")
   @@index([claimId, createdAt, id], map: "ClaimAttachment_claimId_createdAt_id_idx")
   @@index([claimId, uploadStatus, createdAt, id], map: "ClaimAttachment_claimId_uploadStatus_createdAt_id_idx")
   @@index([inboundMessageId])
 }
 
 model ClaimExtraction {
-  id               String                  @id @default(cuid())
-  organizationId   String
-  claimId          String
-  inboundMessageId String?
-  provider         ClaimExtractionProvider @default(OPENAI)
-  model            String
-  schemaVersion    Int                     @default(1)
-  confidence       Float
-  extraction       Json
-  rawOutput        Json
-  createdAt        DateTime                @default(now())
-  organization     Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  claim            Claim                   @relation(fields: [claimId], references: [id], onDelete: Cascade)
-  inboundMessage   InboundMessage?         @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
+  id                  String                  @id @default(cuid())
+  organizationId      String
+  claimId             String
+  inboundMessageId    String?
+  provider            ClaimExtractionProvider @default(OPENAI)
+  model               String
+  schemaVersion       Int                     @default(1)
+  confidence          Float
+  extraction          Json
+  rawOutput           Json
+  rawOutputRedactedAt DateTime?
+  retentionExpiresAt  DateTime?
+  createdAt           DateTime                @default(now())
+  organization        Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  claim               Claim                   @relation(fields: [claimId], references: [id], onDelete: Cascade)
+  inboundMessage      InboundMessage?         @relation(fields: [inboundMessageId], references: [id], onDelete: SetNull)
 
   @@index([organizationId, createdAt])
+  @@index([retentionExpiresAt, rawOutputRedactedAt], map: "ClaimExtraction_retention_redaction_idx")
   @@index([claimId, createdAt, id], map: "ClaimExtraction_claimId_createdAt_id_idx")
   @@index([inboundMessageId])
 }
@@ -286,5 +302,22 @@ model ClaimEvent {
   @@index([claimId, eventType, createdAt, id], map: "ClaimEvent_claimId_eventType_createdAt_id_idx")
   @@index([organizationId, eventType, createdAt], map: "ClaimEvent_organizationId_eventType_createdAt_idx")
   @@index([eventType, createdAt], map: "ClaimEvent_eventType_createdAt_idx")
+  @@index([actorUserId, createdAt])
+}
+
+model AuditEvent {
+  id                   String         @id @default(cuid())
+  organizationId       String
+  actorUserId          String?
+  eventType            AuditEventType
+  /// Version for our internal audit payload contract.
+  payloadSchemaVersion Int            @default(1)
+  payload              Json
+  createdAt            DateTime       @default(now())
+  organization         Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  actorUser            User?          @relation("AuditEventActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, eventType, createdAt], map: "AuditEvent_organizationId_eventType_createdAt_idx")
   @@index([actorUserId, createdAt])
 }

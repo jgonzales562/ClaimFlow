@@ -50,6 +50,7 @@ test("claims export streams JSON attachments with clamped limits and serialized 
     initialBatch: unknown[];
   }> = [];
   const loggedInfo: Array<{ event: string; context: Record<string, unknown> }> = [];
+  const auditCalls: Array<Record<string, unknown>> = [];
   const claims = [
     {
       id: "claim-1",
@@ -99,6 +100,9 @@ test("claims export streams JSON attachments with clamped limits and serialized 
         },
       }),
     buildTimestampTokenFn: () => "2026-03-05T12-00-00-000Z",
+    recordAuditEventFn: async (input) => {
+      auditCalls.push(input);
+    },
     logInfoFn: (event, context) => {
       loggedInfo.push({ event, context });
     },
@@ -156,6 +160,23 @@ test("claims export streams JSON attachments with clamped limits and serialized 
   });
   assert.equal(loggedInfo.length, 1);
   assert.equal(loggedInfo[0]?.event, "claims_export_completed");
+  assert.deepEqual(auditCalls, [
+    {
+      organizationId: AUTH.organizationId,
+      actorUserId: AUTH.userId,
+      eventType: "CLAIM_EXPORT",
+      payload: {
+        format: "json",
+        limit: 5000,
+        filters: {
+          status: "READY",
+          search: "blender",
+          createdFrom: "2026-02-01",
+          createdTo: "2026-02-28",
+        },
+      },
+    },
+  ]);
 });
 
 test("claims export streams JSON results across batches without materializing the full export", async () => {
@@ -181,6 +202,7 @@ test("claims export streams JSON results across batches without materializing th
       return [];
     },
     buildTimestampTokenFn: () => "2026-03-05T12-00-00-000Z",
+    recordAuditEventFn: async () => {},
     logInfoFn: (event, context) => {
       loggedInfo.push({ event, context });
     },
@@ -209,7 +231,10 @@ test("claims export streams JSON results across batches without materializing th
   assert.equal(fetchCalls.length, 2);
   assert.equal(fetchCalls[0]?.take, 250);
   assert.equal(fetchCalls[1]?.take, 1);
-  assert.deepEqual(loggedInfo.map((entry) => entry.event), ["claims_export_completed"]);
+  assert.deepEqual(
+    loggedInfo.map((entry) => entry.event),
+    ["claims_export_completed"],
+  );
   assert.equal(loggedInfo[0]?.context.count, 251);
   assert.equal(loggedInfo[0]?.context.countPrecomputed, false);
 });
@@ -236,6 +261,7 @@ test("claims export defaults to CSV and streams the response body", async () => 
         },
       }),
     buildTimestampTokenFn: () => "2026-03-05T12-00-00-000Z",
+    recordAuditEventFn: async () => {},
     logInfoFn: (event, context) => {
       loggedInfo.push({ event, context });
     },
@@ -251,7 +277,10 @@ test("claims export defaults to CSV and streams the response body", async () => 
   assert.equal(response.headers.get("content-type"), "text/csv; charset=utf-8");
   assert.equal(await response.text(), "header-25\nrow-1\n");
   assert.deepEqual(fetchCalls, [{ cursor: null, take: 25 }]);
-  assert.deepEqual(loggedInfo.map((entry) => entry.event), ["claims_export_completed"]);
+  assert.deepEqual(
+    loggedInfo.map((entry) => entry.event),
+    ["claims_export_completed"],
+  );
   assert.equal(loggedInfo[0]?.context.count, 1);
 });
 
@@ -261,6 +290,7 @@ test("claims export logs CSV stream failures after the response is created", asy
   const handler = createClaimsExportHandler({
     getAuthContextFn: async () => AUTH,
     fetchClaimExportBatchFn: async () => [],
+    recordAuditEventFn: async () => {},
     buildCsvStreamFn: ({ onError }) =>
       new ReadableStream<Uint8Array>({
         start(controller) {
@@ -294,6 +324,7 @@ test("claims export returns 500 when export generation fails", async () => {
     fetchClaimExportBatchFn: async () => {
       throw new Error("simulated export failure");
     },
+    recordAuditEventFn: async () => {},
     captureWebExceptionFn: (error, context) => {
       capturedErrors.push({ error, context });
     },

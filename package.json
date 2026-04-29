@@ -10,6 +10,8 @@
     "test:smoke": "TSX_TSCONFIG_PATH=tsconfig.test.json node --env-file=.env --import tsx --test-concurrency=1 --test tests/full-pipeline-smoke.test.ts",
     "test:e2e": "playwright test",
     "ops:check-health": "node scripts/check-claims-health.mjs",
+    "ops:redact-expired-data": "node --env-file=.env scripts/redact-expired-claim-data.mjs",
+    "ops:reconcile-summaries": "node --env-file=.env scripts/reconcile-claim-organization-summary.mjs",
     "typecheck": "pnpm -r typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

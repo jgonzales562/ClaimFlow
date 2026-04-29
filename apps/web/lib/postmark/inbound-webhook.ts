@@ -17,6 +17,13 @@ import {
 } from "@/lib/claims/ingest";
 import { extractErrorMessage, logError } from "@/lib/observability/log";
 import { captureWebException } from "@/lib/observability/sentry";
+import {
+  appendRateLimitHeaders,
+  defaultRateLimiter,
+  fingerprintRateLimitPart,
+  readClientIp,
+  type RateLimitDecision,
+} from "@/lib/security/rate-limit";
 import { putAttachmentObject } from "@/lib/storage/s3";
 
 const ATTACHMENT_PERSIST_CONCURRENCY = parseIntegerEnv(
@@ -25,6 +32,22 @@ const ATTACHMENT_PERSIST_CONCURRENCY = parseIntegerEnv(
   1,
   10,
 );
+const POSTMARK_WEBHOOK_RATE_LIMIT_ATTEMPTS = parseIntegerEnv(
+  "POSTMARK_WEBHOOK_RATE_LIMIT_ATTEMPTS",
+  120,
+  1,
+  10_000,
+);
+const POSTMARK_WEBHOOK_RATE_LIMIT_WINDOW_MS =
+  parseIntegerEnv("POSTMARK_WEBHOOK_RATE_LIMIT_WINDOW_SECONDS", 60, 1, 86_400) * 1_000;
+const DEFAULT_ALLOWED_ATTACHMENT_TYPES = [
+  "application/pdf",
+  "image/jpeg",
+  "image/jpg",
+  "image/png",
+  "image/tiff",
+  "text/plain",
+];
 
 const existingInboundMessageSelect = {
   id: true,
@@ -41,10 +64,29 @@ type PostmarkInboundRouteDependencies = {
   prismaClient?: typeof prisma;
   maybeEnqueueClaimForProcessingFn?: typeof maybeEnqueueClaimForProcessing;
   putAttachmentObjectFn?: typeof putAttachmentObject;
+  scanAttachmentFn?: typeof scanAttachment;
+  getAttachmentPolicyFn?: typeof getAttachmentPolicy;
+  checkWebhookRateLimitFn?: (request: Request) => Promise<RateLimitDecision>;
   revalidateDashboardSummaryCacheFn?: (organizationId: string) => void;
   captureWebExceptionFn?: typeof captureWebException;
   logErrorFn?: typeof logError;
 };
+
+type AttachmentPolicy = {
+  maxCount: number;
+  maxBytes: number;
+  maxTotalBytes: number;
+  allowedContentTypes: Set<string>;
+};
+
+type AttachmentScanResult =
+  | {
+      disposition: "clean";
+    }
+  | {
+      disposition: "quarantine";
+      reason: string;
+    };
 
 export function createPostmarkInboundHandler(
   dependencies: PostmarkInboundRouteDependencies = {},
@@ -53,12 +95,25 @@ export function createPostmarkInboundHandler(
   const maybeEnqueueClaimForProcessingFn =
     dependencies.maybeEnqueueClaimForProcessingFn ?? maybeEnqueueClaimForProcessing;
   const putAttachmentObjectFn = dependencies.putAttachmentObjectFn ?? putAttachmentObject;
+  const scanAttachmentFn = dependencies.scanAttachmentFn ?? scanAttachment;
+  const getAttachmentPolicyFn = dependencies.getAttachmentPolicyFn ?? getAttachmentPolicy;
+  const checkWebhookRateLimitFn = dependencies.checkWebhookRateLimitFn ?? checkWebhookRateLimit;
   const revalidateDashboardSummaryCacheFn =
     dependencies.revalidateDashboardSummaryCacheFn ?? (() => {});
   const captureWebExceptionFn = dependencies.captureWebExceptionFn ?? captureWebException;
   const logErrorFn = dependencies.logErrorFn ?? logError;
 
   return async function handlePostmarkInboundRequest(request: Request): Promise<Response> {
+    const rateLimitDecision = await checkWebhookRateLimitFn(request);
+    if (!rateLimitDecision.allowed) {
+      const response = Response.json(
+        { error: "Too many webhook requests. Try again later." },
+        { status: 429 },
+      );
+      appendRateLimitHeaders(response.headers, rateLimitDecision);
+      return response;
+    }
+
     const authorization = authorizeRequest(request);
     if (authorization === "misconfigured") {
       logErrorFn("webhook_auth_not_configured", {
@@ -93,6 +148,7 @@ export function createPostmarkInboundHandler(
 
     const providerMessageId = payload.MessageID.trim();
     const attachments = getPostmarkAttachments(payload);
+    const attachmentPolicy = getAttachmentPolicyFn();
 
     const { email: fromEmail, name: fromName } = parsePostmarkAddress(payload.From);
     const { email: toEmail } = parsePostmarkAddress(payload.To);
@@ -117,7 +173,8 @@ export function createPostmarkInboundHandler(
           strippedTextReply: payload.StrippedTextReply ?? null,
           receivedAt: parseReceivedAt(payload.Date),
           rawPayloadSchemaVersion: INBOUND_MESSAGE_RAW_PAYLOAD_SCHEMA_VERSION,
-          rawPayload: payload as PostmarkInboundPayload,
+          rawPayload: sanitizePostmarkPayloadForStorage(payload) as Prisma.InputJsonValue,
+          retentionExpiresAt: getRetentionExpiresAt("CLAIMFLOW_RAW_DATA_RETENTION_DAYS", 30),
           claim: {
             create: {
               organization: {
@@ -150,10 +207,12 @@ export function createPostmarkInboundHandler(
           inboundMessageId: created.id,
           providerMessageId,
           attachments,
+          policy: attachmentPolicy,
         },
         {
           prismaClient,
           putAttachmentObjectFn,
+          scanAttachmentFn,
         },
       );
 
@@ -327,6 +386,32 @@ function secureCompare(a: string, b: string): boolean {
   return timingSafeEqual(digestA, digestB);
 }
 
+async function checkWebhookRateLimit(request: Request): Promise<RateLimitDecision> {
+  const ip = readClientIp(request);
+  const authFingerprint = fingerprintRateLimitPart(request.headers.get("authorization"));
+
+  return defaultRateLimiter.check({
+    key: `postmark-webhook:${ip}:${authFingerprint}`,
+    limit: POSTMARK_WEBHOOK_RATE_LIMIT_ATTEMPTS,
+    windowMs: POSTMARK_WEBHOOK_RATE_LIMIT_WINDOW_MS,
+  });
+}
+
+function sanitizePostmarkPayloadForStorage(
+  payload: PostmarkInboundPayload,
+): PostmarkInboundPayload {
+  return {
+    ...payload,
+    Attachments: payload.Attachments?.map((attachment) => ({
+      Name: attachment.Name ?? null,
+      Content: attachment.Content ? "[redacted]" : null,
+      ContentType: attachment.ContentType ?? null,
+      ContentLength: attachment.ContentLength ?? null,
+      ContentID: attachment.ContentID ?? null,
+    })),
+  };
+}
+
 type ExistingInboundMessageRecord = Prisma.InboundMessageGetPayload<{
   select: typeof existingInboundMessageSelect;
 }>;
@@ -406,10 +491,12 @@ async function persistAttachments(
     inboundMessageId: string;
     providerMessageId: string;
     attachments: NormalizedPostmarkAttachment[];
+    policy: AttachmentPolicy;
   },
   dependencies: {
     prismaClient: typeof prisma;
     putAttachmentObjectFn: typeof putAttachmentObject;
+    scanAttachmentFn: typeof scanAttachment;
   },
 ) {
   if (input.attachments.length === 0) {
@@ -421,18 +508,33 @@ async function persistAttachments(
     };
   }
 
+  const guardedAttachments = applyAttachmentPolicy({
+    attachments: input.attachments,
+    organizationId: input.organizationId,
+    claimId: input.claimId,
+    inboundMessageId: input.inboundMessageId,
+    policy: input.policy,
+  });
+  const preflightFailedRows = guardedAttachments
+    .filter((result): result is PreparedFailedAttachmentPersistence => result.kind === "failed")
+    .map((result) => result);
+  const attachmentsToPersist = guardedAttachments.filter(
+    (result): result is AttachmentPersistenceCandidate => result.kind === "accepted",
+  );
+
   const results = await mapWithConcurrency(
-    input.attachments,
+    attachmentsToPersist,
     ATTACHMENT_PERSIST_CONCURRENCY,
-    async (attachment, index) =>
+    async (candidate) =>
       prepareAttachmentPersistence(
         {
-          index,
+          index: candidate.index,
           organizationId: input.organizationId,
           claimId: input.claimId,
           inboundMessageId: input.inboundMessageId,
           providerMessageId: input.providerMessageId,
-          attachment,
+          attachment: candidate.attachment,
+          policy: input.policy,
         },
         dependencies,
       ),
@@ -441,9 +543,12 @@ async function persistAttachments(
   const storedRows = results.filter(
     (result): result is PreparedStoredAttachmentPersistence => result.kind === "stored",
   );
-  const failedRows = results.filter(
-    (result): result is PreparedFailedAttachmentPersistence => result.kind === "failed",
-  );
+  const failedRows = [
+    ...preflightFailedRows,
+    ...results.filter(
+      (result): result is PreparedFailedAttachmentPersistence => result.kind === "failed",
+    ),
+  ];
   await persistFailedAttachmentRows(failedRows, dependencies.prismaClient);
   const storedWriteFailures = await persistStoredAttachmentRows(
     storedRows,
@@ -478,6 +583,106 @@ type PreparedFailedAttachmentPersistence = {
   };
 };
 
+type AttachmentPersistenceCandidate = {
+  kind: "accepted";
+  index: number;
+  attachment: NormalizedPostmarkAttachment;
+};
+
+function applyAttachmentPolicy(input: {
+  attachments: NormalizedPostmarkAttachment[];
+  organizationId: string;
+  claimId: string;
+  inboundMessageId: string;
+  policy: AttachmentPolicy;
+}): Array<AttachmentPersistenceCandidate | PreparedFailedAttachmentPersistence> {
+  const totalEstimatedBytes = input.attachments.reduce(
+    (total, attachment) => total + attachment.byteSize,
+    0,
+  );
+
+  if (totalEstimatedBytes > input.policy.maxTotalBytes) {
+    return input.attachments.map((attachment, index) =>
+      buildPreflightFailedAttachment({
+        index,
+        attachment,
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        inboundMessageId: input.inboundMessageId,
+        message: `Total attachment size exceeds the ${input.policy.maxTotalBytes} byte limit.`,
+      }),
+    );
+  }
+
+  return input.attachments.map((attachment, index) => {
+    if (index >= input.policy.maxCount) {
+      return buildPreflightFailedAttachment({
+        index,
+        attachment,
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        inboundMessageId: input.inboundMessageId,
+        message: `Attachment count exceeds the ${input.policy.maxCount} file limit.`,
+      });
+    }
+
+    if (attachment.byteSize > input.policy.maxBytes) {
+      return buildPreflightFailedAttachment({
+        index,
+        attachment,
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        inboundMessageId: input.inboundMessageId,
+        message: `Attachment exceeds the ${input.policy.maxBytes} byte per-file limit.`,
+      });
+    }
+
+    if (!isAllowedAttachmentType(attachment, input.policy)) {
+      return buildPreflightFailedAttachment({
+        index,
+        attachment,
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        inboundMessageId: input.inboundMessageId,
+        message: "Attachment content type is not allowed.",
+      });
+    }
+
+    return {
+      kind: "accepted",
+      index,
+      attachment,
+    };
+  });
+}
+
+function buildPreflightFailedAttachment(input: {
+  index: number;
+  attachment: NormalizedPostmarkAttachment;
+  organizationId: string;
+  claimId: string;
+  inboundMessageId: string;
+  message: string;
+}): PreparedFailedAttachmentPersistence {
+  return {
+    kind: "failed",
+    index: input.index,
+    row: buildFailedAttachmentRecordData({
+      organizationId: input.organizationId,
+      claimId: input.claimId,
+      inboundMessageId: input.inboundMessageId,
+      originalFilename: input.attachment.originalFilename,
+      contentType: input.attachment.contentType,
+      byteSize: input.attachment.byteSize,
+      errorMessage: input.message,
+    }),
+    error: {
+      filename: input.attachment.originalFilename,
+      message: input.message,
+    },
+  };
+}
+
 async function prepareAttachmentPersistence(
   input: {
     index: number;
@@ -486,9 +691,11 @@ async function prepareAttachmentPersistence(
     inboundMessageId: string;
     providerMessageId: string;
     attachment: NormalizedPostmarkAttachment;
+    policy: AttachmentPolicy;
   },
   dependencies: {
     putAttachmentObjectFn: typeof putAttachmentObject;
+    scanAttachmentFn: typeof scanAttachment;
   },
 ): Promise<PreparedStoredAttachmentPersistence | PreparedFailedAttachmentPersistence> {
   const attachment = input.attachment;
@@ -517,6 +724,55 @@ async function prepareAttachmentPersistence(
     };
   }
 
+  if (fileBuffer.length > input.policy.maxBytes) {
+    const message = `Attachment exceeds the ${input.policy.maxBytes} byte per-file limit.`;
+    return {
+      kind: "failed",
+      index: input.index,
+      row: buildFailedAttachmentRecordData({
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        inboundMessageId: input.inboundMessageId,
+        originalFilename: attachment.originalFilename,
+        contentType: attachment.contentType,
+        byteSize: fileBuffer.length,
+        errorMessage: message,
+      }),
+      error: {
+        filename: attachment.originalFilename,
+        message,
+      },
+    };
+  }
+
+  const checksumSha256 = createHash("sha256").update(fileBuffer).digest("hex");
+  const scanResult = await dependencies.scanAttachmentFn({
+    filename: attachment.originalFilename,
+    contentType: attachment.contentType,
+    byteSize: fileBuffer.length,
+    checksumSha256,
+  });
+  if (scanResult.disposition === "quarantine") {
+    const message = `Attachment quarantined: ${scanResult.reason}`;
+    return {
+      kind: "failed",
+      index: input.index,
+      row: buildFailedAttachmentRecordData({
+        organizationId: input.organizationId,
+        claimId: input.claimId,
+        inboundMessageId: input.inboundMessageId,
+        originalFilename: attachment.originalFilename,
+        contentType: attachment.contentType,
+        byteSize: fileBuffer.length,
+        errorMessage: message,
+      }),
+      error: {
+        filename: attachment.originalFilename,
+        message,
+      },
+    };
+  }
+
   const s3Key = buildAttachmentS3Key({
     organizationId: input.organizationId,
     claimId: input.claimId,
@@ -524,8 +780,6 @@ async function prepareAttachmentPersistence(
     attachmentId,
     filename: safeFilename,
   });
-
-  const checksumSha256 = createHash("sha256").update(fileBuffer).digest("hex");
 
   try {
     const storedObject = await dependencies.putAttachmentObjectFn({
@@ -555,6 +809,7 @@ async function prepareAttachmentPersistence(
         checksumSha256,
         s3Bucket: storedObject.bucket,
         s3Key: storedObject.key,
+        retentionExpiresAt: getRetentionExpiresAt("CLAIMFLOW_ATTACHMENT_RETENTION_DAYS", 90),
       },
     };
   } catch (error: unknown) {
@@ -705,6 +960,7 @@ function buildFailedAttachmentRecordData(input: {
     s3Bucket: "unavailable",
     s3Key: "unavailable",
     errorMessage: input.errorMessage.slice(0, 2048),
+    retentionExpiresAt: getRetentionExpiresAt("CLAIMFLOW_ATTACHMENT_RETENTION_DAYS", 90),
   };
 }
 
@@ -733,6 +989,77 @@ function sanitizeFilename(value: string): string {
     return "attachment.bin";
   }
   return sanitized.slice(0, 180);
+}
+
+function isAllowedAttachmentType(
+  attachment: NormalizedPostmarkAttachment,
+  policy: AttachmentPolicy,
+): boolean {
+  const contentType = normalizeContentType(attachment.contentType);
+  if (contentType && policy.allowedContentTypes.has(contentType)) {
+    return true;
+  }
+
+  const filename = attachment.originalFilename.toLowerCase();
+  if (filename.endsWith(".pdf")) {
+    return policy.allowedContentTypes.has("application/pdf");
+  }
+  if (filename.endsWith(".jpg") || filename.endsWith(".jpeg")) {
+    return (
+      policy.allowedContentTypes.has("image/jpeg") || policy.allowedContentTypes.has("image/jpg")
+    );
+  }
+  if (filename.endsWith(".png")) {
+    return policy.allowedContentTypes.has("image/png");
+  }
+  if (filename.endsWith(".tiff") || filename.endsWith(".tif")) {
+    return policy.allowedContentTypes.has("image/tiff");
+  }
+
+  return false;
+}
+
+async function scanAttachment(_input: {
+  filename: string;
+  contentType: string | null;
+  byteSize: number;
+  checksumSha256: string;
+}): Promise<AttachmentScanResult> {
+  return { disposition: "clean" };
+}
+
+function getAttachmentPolicy(): AttachmentPolicy {
+  return {
+    maxCount: parseIntegerEnv("POSTMARK_MAX_ATTACHMENTS", 10, 0, 100),
+    maxBytes: parseIntegerEnv(
+      "POSTMARK_MAX_ATTACHMENT_BYTES",
+      10 * 1024 * 1024,
+      1,
+      100 * 1024 * 1024,
+    ),
+    maxTotalBytes: parseIntegerEnv(
+      "POSTMARK_MAX_TOTAL_ATTACHMENT_BYTES",
+      25 * 1024 * 1024,
+      1,
+      250 * 1024 * 1024,
+    ),
+    allowedContentTypes: readAllowedAttachmentTypes(),
+  };
+}
+
+function readAllowedAttachmentTypes(): Set<string> {
+  const raw = process.env.POSTMARK_ALLOWED_ATTACHMENT_TYPES?.trim();
+  const values = raw ? raw.split(",") : DEFAULT_ALLOWED_ATTACHMENT_TYPES;
+  return new Set(
+    values
+      .map((value) => normalizeContentType(value))
+      .filter((value): value is string => Boolean(value)),
+  );
+}
+
+function normalizeContentType(value: string | null): string | null {
+  const normalized = value?.split(";")[0]?.trim().toLowerCase();
+  return normalized || null;
 }
 
 const BASE64_CONTENT_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
@@ -771,4 +1098,13 @@ function parseIntegerEnv(name: string, fallback: number, min: number, max: numbe
   }
 
   return parsed;
+}
+
+function getRetentionExpiresAt(envName: string, fallbackDays: number): Date | null {
+  const days = parseIntegerEnv(envName, fallbackDays, 0, 3650);
+  if (days === 0) {
+    return null;
+  }
+
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1_000);
 }

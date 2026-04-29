@@ -105,9 +105,13 @@ test("attachment download returns 409 when inline preview is requested for unsup
 
 test("attachment download redirects to a signed URL on success", async () => {
   const signedUrlCalls: Array<Record<string, unknown>> = [];
+  const auditCalls: Array<Record<string, unknown>> = [];
   const handler = createAttachmentDownloadHandler({
     getAuthContextFn: async () => AUTH,
     findAttachmentFn: async () => STORED_ATTACHMENT,
+    recordAuditEventFn: async (input) => {
+      auditCalls.push(input);
+    },
     createSignedAttachmentAccessUrlFn: async (input) => {
       signedUrlCalls.push(input);
       return "https://signed.example.test/download";
@@ -134,6 +138,20 @@ test("attachment download redirects to a signed URL on success", async () => {
       disposition: "inline",
     },
   ]);
+  assert.deepEqual(auditCalls, [
+    {
+      organizationId: AUTH.organizationId,
+      actorUserId: AUTH.userId,
+      eventType: "ATTACHMENT_ACCESS",
+      payload: {
+        claimId: "claim-1",
+        attachmentId: "attachment-1",
+        disposition: "inline",
+        contentType: "application/pdf",
+        originalFilename: "receipt.pdf",
+      },
+    },
+  ]);
 });
 
 test("attachment download returns 500 and logs when signed URL generation fails", async () => {
@@ -142,6 +160,7 @@ test("attachment download returns 500 and logs when signed URL generation fails"
   const handler = createAttachmentDownloadHandler({
     getAuthContextFn: async () => AUTH,
     findAttachmentFn: async () => STORED_ATTACHMENT,
+    recordAuditEventFn: async () => {},
     createSignedAttachmentAccessUrlFn: async () => {
       throw new Error("simulated signer failure");
     },

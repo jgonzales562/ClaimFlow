@@ -21,6 +21,7 @@ export type WorkerConfig = ClaimIngestJobConfig & {
   processingWatchdogConcurrency: number;
   pollWaitSeconds: number;
   visibilityTimeoutSeconds: number | undefined;
+  visibilityExtensionIntervalMs: number | undefined;
   maxMessages: number;
   processingConcurrency: number;
   maxReceiveCount: number;
@@ -120,6 +121,11 @@ export function loadWorkerConfig(): WorkerConfig {
       "CLAIMS_QUEUE_VISIBILITY_TIMEOUT_SECONDS",
       0,
       43200,
+    ),
+    visibilityExtensionIntervalMs: parseOptionalIntegerEnv(
+      "CLAIMS_QUEUE_VISIBILITY_EXTENSION_INTERVAL_MS",
+      1000,
+      86_400_000,
     ),
     maxMessages: parseIntegerEnv("CLAIMS_QUEUE_MAX_MESSAGES", 5, 1, 10),
     processingConcurrency: parseIntegerEnv("CLAIMS_WORKER_CONCURRENCY", 1, 1, 10),

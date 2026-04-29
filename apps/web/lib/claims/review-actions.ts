@@ -18,6 +18,7 @@ type DashboardClaimActionDependencies = {
   redirectFn: (location: string) => void;
   revalidatePathFn: (path: string) => void;
   revalidateDashboardSummaryCacheFn?: (organizationId: string) => void;
+  assertSameOriginFn?: () => Promise<boolean> | boolean;
   updateClaimReviewFn?: typeof updateClaimReview;
   transitionDashboardClaimStatusFn?: typeof transitionDashboardClaimStatus;
   retryErroredClaimFn?: typeof retryErroredClaimService;
@@ -38,6 +39,16 @@ export function createDashboardClaimActionHandlers(
   const retryErroredClaimFn = dependencies.retryErroredClaimFn ?? retryErroredClaimService;
   const recoverStaleProcessingClaimFn =
     dependencies.recoverStaleProcessingClaimFn ?? recoverStaleProcessingClaimService;
+  const assertSameOriginFn = dependencies.assertSameOriginFn ?? (() => true);
+
+  async function requireSameOrigin(claimId: string): Promise<boolean> {
+    if (await assertSameOriginFn()) {
+      return true;
+    }
+
+    dependencies.redirectFn(`/dashboard/claims/${claimId}?error=invalid_request`);
+    return false;
+  }
 
   async function requireAnalystAuth(
     claimId: string,
@@ -59,6 +70,10 @@ export function createDashboardClaimActionHandlers(
 
   async function updateClaimReviewAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
+    if (!(await requireSameOrigin(claimId))) {
+      return;
+    }
+
     const auth = await requireAnalystAuth(claimId);
     if (!auth) {
       return;
@@ -106,6 +121,10 @@ export function createDashboardClaimActionHandlers(
 
   async function transitionClaimStatusAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
+    if (!(await requireSameOrigin(claimId))) {
+      return;
+    }
+
     const auth = await requireAnalystAuth(claimId);
     if (!auth) {
       return;
@@ -145,6 +164,10 @@ export function createDashboardClaimActionHandlers(
 
   async function retryClaimAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
+    if (!(await requireSameOrigin(claimId))) {
+      return;
+    }
+
     const auth = await requireAnalystAuth(claimId);
     if (!auth) {
       return;
@@ -188,6 +211,10 @@ export function createDashboardClaimActionHandlers(
 
   async function recoverProcessingAction(formData: FormData): Promise<void> {
     const claimId = readRequiredString(formData.get("claimId"));
+    if (!(await requireSameOrigin(claimId))) {
+      return;
+    }
+
     const auth = await requireAnalystAuth(claimId);
     if (!auth) {
       return;

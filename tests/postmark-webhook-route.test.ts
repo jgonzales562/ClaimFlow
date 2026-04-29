@@ -55,6 +55,32 @@ test("postmark webhook fails closed when auth credentials are not configured", a
   );
 });
 
+test("postmark webhook returns 429 when rate limited before auth", async () => {
+  const handler = createPostmarkInboundHandler({
+    checkWebhookRateLimitFn: async () => ({
+      allowed: false,
+      retryAfterSeconds: 45,
+      resetAt: new Date("2026-03-05T12:00:45.000Z"),
+    }),
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/webhooks/postmark/inbound", {
+      method: "POST",
+      body: JSON.stringify({ MessageID: `message-${randomUUID()}` }),
+      headers: {
+        "content-type": "application/json",
+      },
+    }),
+  );
+
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "45");
+  assert.deepEqual(await response.json(), {
+    error: "Too many webhook requests. Try again later.",
+  });
+});
+
 test("postmark webhook uses the default org fallback only when explicitly enabled", async () => {
   const suffix = randomUUID();
   const providerMessageId = `message-${suffix}`;
@@ -440,6 +466,131 @@ test("postmark webhook persists stored attachments and returns attachment counts
           attachments[0]?.s3Key ?? "",
           /^test-prefix\/orgs\/.+\/claims\/.+\/messages\/.+\/.+-receipt\.pdf$/,
         );
+
+        const inboundMessage = await prisma.inboundMessage.findFirstOrThrow({
+          where: {
+            organizationId: organization.id,
+            providerMessageId,
+          },
+          select: {
+            rawPayload: true,
+            retentionExpiresAt: true,
+          },
+        });
+        const rawPayload = inboundMessage.rawPayload as {
+          Attachments?: Array<{ Content?: string | null }>;
+        };
+        assert.equal(rawPayload.Attachments?.[0]?.Content, "[redacted]");
+        assert.ok(inboundMessage.retentionExpiresAt instanceof Date);
+      } finally {
+        await prisma.organization.delete({
+          where: {
+            id: organization.id,
+          },
+        });
+      }
+    },
+  );
+});
+
+test("postmark webhook records disallowed attachments as failed without uploading them", async () => {
+  const suffix = randomUUID();
+  const mailboxHash = `mailbox-${suffix}`;
+  const providerMessageId = `message-${suffix}`;
+  const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+  const storedObjects: Array<{ key: string }> = [];
+
+  await withEnv(
+    {
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+    },
+    async () => {
+      const handler = createPostmarkInboundHandler({
+        prismaClient: prisma,
+        maybeEnqueueClaimForProcessingFn: async () => ({
+          reason: "queue_not_configured",
+        }),
+        putAttachmentObjectFn: async (input) => {
+          storedObjects.push({ key: input.key });
+          return {
+            bucket: "test-bucket",
+            key: input.key,
+          };
+        },
+      });
+
+      const organization = await prisma.organization.create({
+        data: {
+          name: `Webhook Disallowed Attachment Test ${suffix}`,
+          slug: `webhook-disallowed-attachment-test-${suffix}`,
+          integrationMailbox: {
+            create: {
+              provider: "POSTMARK",
+              mailboxHash,
+              emailAddress: `claims+${suffix}@example.com`,
+            },
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      try {
+        const response = await handler(
+          new Request("http://localhost/api/webhooks/postmark/inbound", {
+            method: "POST",
+            body: JSON.stringify({
+              MessageID: providerMessageId,
+              MailboxHash: mailboxHash,
+              From: `Customer <customer-${suffix}@example.com>`,
+              To: `claims+${suffix}@example.com`,
+              Subject: "Suspicious attachment",
+              TextBody: "Executable attached.",
+              Attachments: [
+                {
+                  Name: "runme.exe",
+                  Content: Buffer.from("MZ").toString("base64"),
+                  ContentType: "application/x-msdownload",
+                  ContentLength: 2,
+                },
+              ],
+            }),
+            headers: {
+              authorization: authHeader,
+              "content-type": "application/json",
+            },
+          }),
+        );
+
+        assert.equal(response.status, 200);
+        assert.deepEqual((await response.json()).attachments, {
+          received: 1,
+          stored: 0,
+          failed: 1,
+          errors: [
+            {
+              filename: "runme.exe",
+              message: "Attachment content type is not allowed.",
+            },
+          ],
+        });
+        assert.equal(storedObjects.length, 0);
+
+        const attachment = await prisma.claimAttachment.findFirstOrThrow({
+          where: {
+            organizationId: organization.id,
+          },
+          select: {
+            uploadStatus: true,
+            errorMessage: true,
+            retentionExpiresAt: true,
+          },
+        });
+        assert.equal(attachment.uploadStatus, "FAILED");
+        assert.equal(attachment.errorMessage, "Attachment content type is not allowed.");
+        assert.ok(attachment.retentionExpiresAt instanceof Date);
       } finally {
         await prisma.organization.delete({
           where: {

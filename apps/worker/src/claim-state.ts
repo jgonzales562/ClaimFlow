@@ -19,7 +19,11 @@ export type PersistClaimExtractionOutcomeInput = {
   selectedExtraction: ClaimExtractionResult;
   primaryRawOutput: Record<string, unknown>;
   secondaryRawOutput: Record<string, unknown> | null;
-  extractionSource: "fallback_local_textract" | "fallback_local" | "textract_fallback" | "openai_direct";
+  extractionSource:
+    | "fallback_local_textract"
+    | "fallback_local"
+    | "textract_fallback"
+    | "openai_direct";
   shouldAttemptTextract: boolean;
   usedTextractPass: boolean;
   textractMetadata: Prisma.InputJsonValue;
@@ -200,6 +204,7 @@ export async function persistClaimExtractionOutcome(
           textract: input.textractMetadata,
           textractPass: input.secondaryRawOutput,
         } as Prisma.InputJsonValue,
+        retentionExpiresAt: getRetentionExpiresAt("CLAIMFLOW_RAW_DATA_RETENTION_DAYS", 30),
       },
       select: {
         id: true,
@@ -222,6 +227,29 @@ export async function persistClaimExtractionOutcome(
 
     return nextStatus;
   });
+}
+
+function getRetentionExpiresAt(envName: string, fallbackDays: number): Date | null {
+  const days = parseIntegerEnv(envName, fallbackDays, 0, 3650);
+  if (days === 0) {
+    return null;
+  }
+
+  return new Date(Date.now() + days * 24 * 60 * 60 * 1_000);
+}
+
+function parseIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 function parsePurchaseDate(value: string | null): Date | null {

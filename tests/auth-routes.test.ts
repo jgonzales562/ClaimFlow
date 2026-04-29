@@ -512,7 +512,7 @@ test("logout JSON clears the session and pending-login cookies", async () => {
   const response = await handler(
     new Request("http://localhost/api/auth/logout", {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", origin: "http://localhost" },
     }),
   );
 
@@ -530,6 +530,7 @@ test("logout form redirects to login and clears the session and pending-login co
   const response = await handler(
     new Request("http://localhost/api/auth/logout", {
       method: "POST",
+      headers: { origin: "http://localhost" },
     }),
   );
 
@@ -539,6 +540,43 @@ test("logout form redirects to login and clears the session and pending-login co
   const setCookies = readSetCookieHeaders(response);
   assertHasCookie(setCookies, /^claimflow_session=;/);
   assertHasCookie(setCookies, /^claimflow_pending_login=;/);
+});
+
+test("logout rejects cross-origin requests", async () => {
+  const handler = createLogoutHandler();
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/logout", {
+      method: "POST",
+      headers: { origin: "https://attacker.example" },
+    }),
+  );
+
+  assert.equal(response.status, 403);
+});
+
+test("login JSON returns 429 when the login rate limiter blocks the attempt", async () => {
+  const handler = createLoginHandler({
+    checkLoginRateLimitFn: async () => ({
+      allowed: false,
+      retryAfterSeconds: 30,
+      resetAt: new Date("2026-03-05T12:00:30.000Z"),
+    }),
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/login", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "analyst@example.com", password: "wrong-password" }),
+    }),
+  );
+
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "30");
+  assert.deepEqual(await response.json(), {
+    error: "Too many sign-in attempts. Try again later.",
+  });
 });
 
 function readSetCookieHeaders(response: Response): string[] {

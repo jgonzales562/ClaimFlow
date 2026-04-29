@@ -64,6 +64,7 @@ export async function processClaimIngestJob(
         where: {
           claimId: input.claimId,
           uploadStatus: "STORED",
+          deletedAt: null,
         },
         orderBy: [{ createdAt: "asc" }, { id: "asc" }],
         take: input.limit,

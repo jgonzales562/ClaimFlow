@@ -1,4 +1,5 @@
 import type { Message } from "@aws-sdk/client-sqs";
+import { ChangeMessageVisibilityCommand } from "@aws-sdk/client-sqs";
 import {
   deleteMessageFromQueue,
   handleQueueProcessingFailure,
@@ -24,10 +25,15 @@ type QueueMessageHandlerConfig = {
   queueUrl: string;
   dlqUrl: string | null;
   maxReceiveCount: number;
+  visibilityTimeoutSeconds?: number;
+  visibilityExtensionIntervalMs?: number;
 };
 
 type QueueMessageHandlerDependencies<TConfig extends QueueMessageHandlerConfig> = {
-  processClaimIngestJobFn: (config: TConfig, queueMessage: ClaimIngestQueueMessage) => Promise<void>;
+  processClaimIngestJobFn: (
+    config: TConfig,
+    queueMessage: ClaimIngestQueueMessage,
+  ) => Promise<void>;
   markClaimAsErrorFn: (input: MarkClaimAsErrorInput) => Promise<void>;
   releaseClaimProcessingLeaseFn?: (input: {
     claimId: string;
@@ -87,7 +93,17 @@ export async function handleClaimQueueMessage<TConfig extends QueueMessageHandle
   }
 
   try {
-    await dependencies.processClaimIngestJobFn(input.config, queueMessage);
+    await runWithVisibilityExtension(
+      () => dependencies.processClaimIngestJobFn(input.config, queueMessage),
+      {
+        config: input.config,
+        sqsClient: input.sqsClient,
+        receiptHandle,
+      },
+      {
+        logErrorFn: dependencies.logErrorFn,
+      },
+    );
     await deleteMessageFromQueue({
       sqsClient: input.sqsClient,
       queueUrl: input.config.queueUrl,
@@ -120,6 +136,72 @@ export async function handleClaimQueueMessage<TConfig extends QueueMessageHandle
         releaseClaimProcessingLeaseFn: dependencies.releaseClaimProcessingLeaseFn,
       },
     );
+  }
+}
+
+async function runWithVisibilityExtension(
+  run: () => Promise<void>,
+  input: {
+    config: QueueMessageHandlerConfig;
+    sqsClient: QueueSqsClient;
+    receiptHandle: string;
+  },
+  dependencies: {
+    logErrorFn: (event: string, context: Record<string, unknown>) => void;
+  },
+): Promise<void> {
+  const visibilityTimeoutSeconds = input.config.visibilityTimeoutSeconds;
+  if (!visibilityTimeoutSeconds || visibilityTimeoutSeconds <= 0) {
+    await run();
+    return;
+  }
+
+  const intervalMs =
+    input.config.visibilityExtensionIntervalMs ??
+    Math.max(1_000, Math.floor((visibilityTimeoutSeconds * 1_000) / 2));
+  const timer = setInterval(() => {
+    void extendMessageVisibility(
+      {
+        sqsClient: input.sqsClient,
+        queueUrl: input.config.queueUrl,
+        receiptHandle: input.receiptHandle,
+        visibilityTimeoutSeconds,
+      },
+      dependencies,
+    );
+  }, intervalMs);
+  timer.unref?.();
+
+  try {
+    await run();
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+async function extendMessageVisibility(
+  input: {
+    sqsClient: QueueSqsClient;
+    queueUrl: string;
+    receiptHandle: string;
+    visibilityTimeoutSeconds: number;
+  },
+  dependencies: {
+    logErrorFn: (event: string, context: Record<string, unknown>) => void;
+  },
+): Promise<void> {
+  try {
+    await input.sqsClient.send(
+      new ChangeMessageVisibilityCommand({
+        QueueUrl: input.queueUrl,
+        ReceiptHandle: input.receiptHandle,
+        VisibilityTimeout: input.visibilityTimeoutSeconds,
+      }),
+    );
+  } catch (error: unknown) {
+    dependencies.logErrorFn("queue_visibility_extension_failed", {
+      error: extractErrorMessage(error),
+    });
   }
 }
 

@@ -1,4 +1,12 @@
 import { prisma } from "@claimflow/db";
+import {
+  appendRateLimitHeaders,
+  defaultRateLimiter,
+  fingerprintRateLimitPart,
+  readClientIp,
+  type RateLimitDecision,
+} from "@/lib/security/rate-limit";
+import { assertSameOriginRequest, type SameOriginCheckResult } from "@/lib/security/same-origin";
 import { verifyPassword } from "./password";
 import {
   createPendingLoginToken,
@@ -20,8 +28,11 @@ const INVALID_ROLE_MESSAGE = "User has an invalid organization role. Contact an 
 const MULTIPLE_MEMBERSHIPS_MESSAGE =
   "User belongs to multiple organizations. Organization selection is required.";
 const NO_MEMBERSHIP_MESSAGE = "User has no organization membership. Contact an administrator.";
-const ORGANIZATION_SELECTION_EXPIRED_MESSAGE =
-  "Organization selection expired. Sign in again.";
+const ORGANIZATION_SELECTION_EXPIRED_MESSAGE = "Organization selection expired. Sign in again.";
+const RATE_LIMITED_MESSAGE = "Too many sign-in attempts. Try again later.";
+const LOGIN_RATE_LIMIT_ATTEMPTS = parseIntegerEnv("LOGIN_RATE_LIMIT_ATTEMPTS", 50, 1, 1_000);
+const LOGIN_RATE_LIMIT_WINDOW_MS =
+  parseIntegerEnv("LOGIN_RATE_LIMIT_WINDOW_SECONDS", 15 * 60, 1, 86_400) * 1_000;
 
 const loginUserSelect = {
   id: true,
@@ -80,11 +91,16 @@ type LoginDependencies = {
   getSessionCookieOptionsFn?: typeof getSessionCookieOptions;
   getPendingLoginCookieOptionsFn?: typeof getPendingLoginCookieOptions;
   getExpiredPendingLoginCookieOptionsFn?: typeof getExpiredPendingLoginCookieOptions;
+  checkLoginRateLimitFn?: (input: {
+    request: Request;
+    email: string;
+  }) => Promise<RateLimitDecision>;
 };
 
 type LogoutDependencies = {
   getExpiredSessionCookieOptionsFn?: typeof getExpiredSessionCookieOptions;
   getExpiredPendingLoginCookieOptionsFn?: typeof getExpiredPendingLoginCookieOptions;
+  assertSameOriginRequestFn?: typeof assertSameOriginRequest;
 };
 
 type ParsedFormLoginRequest = {
@@ -140,6 +156,7 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
     dependencies.getPendingLoginCookieOptionsFn ?? getPendingLoginCookieOptions;
   const getExpiredPendingLoginCookieOptionsFn =
     dependencies.getExpiredPendingLoginCookieOptionsFn ?? getExpiredPendingLoginCookieOptions;
+  const checkLoginRateLimitFn = dependencies.checkLoginRateLimitFn ?? checkLoginRateLimit;
 
   return async function POST(request: Request): Promise<Response> {
     const isJsonRequest =
@@ -196,6 +213,16 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
 
     const email = credentials.email.toLowerCase().trim();
     const password = credentials.password;
+    const rateLimitDecision = await checkLoginRateLimitFn({ request, email });
+    if (!rateLimitDecision.allowed) {
+      return buildRateLimitedLoginResponse({
+        request,
+        isJsonRequest,
+        redirectTo: formRequest?.redirectTo ?? null,
+        decision: rateLimitDecision,
+      });
+    }
+
     const user = await findUserByEmailFn(email);
 
     if (!user || !user.passwordHash) {
@@ -276,8 +303,15 @@ export function createLogoutHandler(dependencies: LogoutDependencies = {}) {
     dependencies.getExpiredSessionCookieOptionsFn ?? getExpiredSessionCookieOptions;
   const getExpiredPendingLoginCookieOptionsFn =
     dependencies.getExpiredPendingLoginCookieOptionsFn ?? getExpiredPendingLoginCookieOptions;
+  const assertSameOriginRequestFn =
+    dependencies.assertSameOriginRequestFn ?? assertSameOriginRequest;
 
   return async function POST(request: Request): Promise<Response> {
+    const sameOriginResult = assertSameOriginRequestFn(request);
+    if (!sameOriginResult.ok) {
+      return buildForbiddenResponse(sameOriginResult);
+    }
+
     const isJsonRequest =
       request.headers.get("content-type")?.includes("application/json") ?? false;
 
@@ -291,11 +325,7 @@ export function createLogoutHandler(dependencies: LogoutDependencies = {}) {
     );
     response.headers.append(
       "set-cookie",
-      serializeCookie(
-        PENDING_LOGIN_COOKIE_NAME,
-        "",
-        getExpiredPendingLoginCookieOptionsFn(),
-      ),
+      serializeCookie(PENDING_LOGIN_COOKIE_NAME, "", getExpiredPendingLoginCookieOptionsFn()),
     );
     return response;
   };
@@ -415,12 +445,35 @@ function buildAuthenticatedLoginResponse(input: {
   );
   response.headers.append(
     "set-cookie",
-    serializeCookie(
-      PENDING_LOGIN_COOKIE_NAME,
-      "",
-      input.getExpiredPendingLoginCookieOptionsFn(),
-    ),
+    serializeCookie(PENDING_LOGIN_COOKIE_NAME, "", input.getExpiredPendingLoginCookieOptionsFn()),
   );
+  return response;
+}
+
+async function checkLoginRateLimit(input: {
+  request: Request;
+  email: string;
+}): Promise<RateLimitDecision> {
+  const ip = readClientIp(input.request);
+  const emailFingerprint = fingerprintRateLimitPart(input.email.toLowerCase());
+
+  return defaultRateLimiter.check({
+    key: `login:${ip}:${emailFingerprint}`,
+    limit: LOGIN_RATE_LIMIT_ATTEMPTS,
+    windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
+  });
+}
+
+function buildRateLimitedLoginResponse(input: {
+  request: Request;
+  isJsonRequest: boolean;
+  redirectTo: string | null;
+  decision: Extract<RateLimitDecision, { allowed: false }>;
+}): Response {
+  const response = input.isJsonRequest
+    ? Response.json({ error: RATE_LIMITED_MESSAGE }, { status: 429 })
+    : buildLoginErrorRedirect(input.request, "rate_limited", input.redirectTo);
+  appendRateLimitHeaders(response.headers, input.decision);
   return response;
 }
 
@@ -534,7 +587,9 @@ function readFormStringField(
   return value.length > 0 ? value : null;
 }
 
-function readFormIntentField(value: FormDataEntryValue | null): "credentials" | "select_organization" {
+function readFormIntentField(
+  value: FormDataEntryValue | null,
+): "credentials" | "select_organization" {
   return value === "select_organization" ? "select_organization" : "credentials";
 }
 
@@ -638,6 +693,16 @@ function redirectResponse(url: URL, status: 303): Response {
   });
 }
 
+function buildForbiddenResponse(result: SameOriginCheckResult): Response {
+  return Response.json(
+    {
+      error: "Forbidden",
+      reason: result.ok ? undefined : result.reason,
+    },
+    { status: 403 },
+  );
+}
+
 function readRequestCookie(request: Request, name: string): string | null {
   const cookieHeader = request.headers.get("cookie");
   if (!cookieHeader) {
@@ -672,6 +737,20 @@ function serializeCookie(name: string, value: string, options: CookieOptions): s
   }
 
   return segments.join("; ");
+}
+
+function parseIntegerEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed < min || parsed > max) {
+    return fallback;
+  }
+
+  return parsed;
 }
 
 function capitalizeToken(value: string): string {

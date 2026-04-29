@@ -10,6 +10,7 @@ import {
 import { DEFAULT_CLAIMS_EXPORT_LIMIT, MAX_CLAIMS_EXPORT_LIMIT } from "@/lib/claims/config";
 import { captureWebException } from "@/lib/observability/sentry";
 import { extractErrorMessage, logError, logInfo } from "@/lib/observability/log";
+import { recordWebAuditEvent } from "@/lib/security/audit";
 
 const CLAIM_EXPORT_BATCH_SIZE = 250;
 const CSV_STREAM_CHUNK_ROWS = 64;
@@ -59,6 +60,7 @@ type ClaimsExportDependencies = {
   captureWebExceptionFn?: typeof captureWebException;
   logInfoFn?: typeof logInfo;
   logErrorFn?: typeof logError;
+  recordAuditEventFn?: typeof recordWebAuditEvent;
   buildTimestampTokenFn?: () => string;
 };
 
@@ -70,6 +72,7 @@ export function createClaimsExportHandler(dependencies: ClaimsExportDependencies
   const captureWebExceptionFn = dependencies.captureWebExceptionFn ?? captureWebException;
   const logInfoFn = dependencies.logInfoFn ?? logInfo;
   const logErrorFn = dependencies.logErrorFn ?? logError;
+  const recordAuditEventFn = dependencies.recordAuditEventFn ?? recordWebAuditEvent;
   const buildTimestampTokenFn = dependencies.buildTimestampTokenFn ?? buildTimestampToken;
 
   return async function GET(request: Request): Promise<Response> {
@@ -102,6 +105,22 @@ export function createClaimsExportHandler(dependencies: ClaimsExportDependencies
       }
 
       const where = buildClaimWhereInput(auth.organizationId, filters);
+      await recordAuditEventFn({
+        organizationId: auth.organizationId,
+        actorUserId: auth.userId,
+        eventType: "CLAIM_EXPORT",
+        payload: {
+          format,
+          limit,
+          filters: {
+            status: filters.status,
+            search: filters.search,
+            createdFrom: formatDateInput(filters.createdFrom) || null,
+            createdTo: formatDateInput(filters.createdTo) || null,
+          },
+        },
+      });
+
       const initialTake = Math.min(CLAIM_EXPORT_BATCH_SIZE, limit);
       const initialBatch = await fetchClaimExportBatchFn({
         where,

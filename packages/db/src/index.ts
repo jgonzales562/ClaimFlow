@@ -6,6 +6,7 @@ export {
   startClaimProcessingAttemptIfCurrent,
 } from "./claim-processing.js";
 export {
+  AUDIT_EVENT_PAYLOAD_SCHEMA_VERSION,
   CLAIM_EXTRACTION_SCHEMA_VERSION,
   CLAIM_EVENT_PAYLOAD_SCHEMA_VERSION,
   INBOUND_MESSAGE_RAW_PAYLOAD_SCHEMA_VERSION,
@@ -35,6 +36,8 @@ export type {
   DispatchPendingClaimIngestQueueOutboxResult,
 } from "./claim-ingest-queue-outbox.js";
 export { recordClaimStatusTransition, transitionClaimStatusIfCurrent } from "./claim-status.js";
+export { redactExpiredClaimData } from "./data-retention.js";
+export type { RedactExpiredClaimDataResult } from "./data-retention.js";
 
 const prismaGlobal = globalThis as unknown as {
   prisma?: PrismaClient;
