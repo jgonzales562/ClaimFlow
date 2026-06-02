@@ -195,6 +195,22 @@ export function readClaimExtractionReasoning(value: unknown): string | null {
   return typeof record.reasoning === "string" ? record.reasoning : null;
 }
 
+export function readClaimExtractionKeywordMatches(value: unknown): string[] {
+  if (typeof value !== "object" || value === null) {
+    return [];
+  }
+
+  const keywordMatches = (value as Record<string, unknown>).keywordMatches;
+  if (!Array.isArray(keywordMatches)) {
+    return [];
+  }
+
+  return keywordMatches
+    .filter((keyword): keyword is string => typeof keyword === "string")
+    .map((keyword) => keyword.trim())
+    .filter((keyword) => keyword.length > 0);
+}
+
 export function describeClaimEvent(eventType: string, payload: unknown): string {
   if (typeof payload !== "object" || payload === null) {
     return eventType === "MANUAL_EDIT" ? "Manual claim edits were saved." : "Status updated.";

@@ -19,6 +19,17 @@ async function main(): Promise<void> {
     },
   });
 
+  await prisma.organizationExtractionSettings.upsert({
+    where: { organizationId: organization.id },
+    update: {
+      scanKeywords: ["serial number", "proof of purchase", "compressor failure"],
+    },
+    create: {
+      organizationId: organization.id,
+      scanKeywords: ["serial number", "proof of purchase", "compressor failure"],
+    },
+  });
+
   const adminUser = await prisma.user.upsert({
     where: { email: seedAdmin.email },
     update: {

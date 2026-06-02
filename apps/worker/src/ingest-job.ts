@@ -40,6 +40,12 @@ type ClaimIngestJobDependencies = {
       s3Key: string;
     }>
   >;
+  loadOrganizationExtractionSettingsFn?: (
+    prismaClient: PrismaClient,
+    input: {
+      organizationId: string;
+    },
+  ) => Promise<{ scanKeywords: string[] } | null>;
   persistClaimExtractionOutcomeFn?: (
     prismaClient: PrismaClient,
     input: PersistClaimExtractionOutcomeInput,
@@ -78,6 +84,17 @@ export async function processClaimIngestJob(
       }));
   const persistClaimExtractionOutcomeFn =
     dependencies.persistClaimExtractionOutcomeFn ?? persistClaimExtractionOutcome;
+  const loadOrganizationExtractionSettingsFn =
+    dependencies.loadOrganizationExtractionSettingsFn ??
+    ((dbClient, input) =>
+      dbClient.organizationExtractionSettings.findUnique({
+        where: {
+          organizationId: input.organizationId,
+        },
+        select: {
+          scanKeywords: true,
+        },
+      }));
   const logInfoFn = dependencies.logInfoFn ?? (() => {});
   const logErrorFn = dependencies.logErrorFn ?? (() => {});
 
@@ -211,6 +228,11 @@ export async function processClaimIngestJob(
     return;
   }
 
+  const extractionSettings = await loadOrganizationExtractionSettingsFn(prismaClient, {
+    organizationId: claim.organizationId,
+  });
+  const organizationScanKeywords = extractionSettings?.scanKeywords ?? [];
+
   const runExtraction = (supplementalText: string | null) =>
     extractClaimDataFn(
       {
@@ -221,6 +243,7 @@ export async function processClaimIngestJob(
         strippedTextReply: inboundMessage.strippedTextReply,
         claimIssueSummary: claim.issueSummary,
         supplementalText,
+        organizationScanKeywords,
       },
       {
         openAiApiKey: config.openAiApiKey,

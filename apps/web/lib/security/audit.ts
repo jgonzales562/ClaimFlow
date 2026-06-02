@@ -1,7 +1,10 @@
 import { AUDIT_EVENT_PAYLOAD_SCHEMA_VERSION, prisma } from "@claimflow/db";
 import type { Prisma } from "@prisma/client";
 
-export type WebAuditEventType = "CLAIM_EXPORT" | "ATTACHMENT_ACCESS";
+export type WebAuditEventType =
+  | "CLAIM_EXPORT"
+  | "ATTACHMENT_ACCESS"
+  | "EXTRACTION_SETTINGS_UPDATE";
 
 export type RecordWebAuditEventInput = {
   organizationId: string;

@@ -13,6 +13,7 @@ It accepts inbound claim emails, stores attachments, runs automated extraction w
   - attachment count, size, type, and scanner guardrails
   - raw payload redaction and retention metadata
   - durable export and attachment-access audit events
+  - organization-specific extraction scan keywords
   - DB-backed integration tests
   - browser e2e operator flows
   - full pipeline smoke tests
@@ -41,9 +42,9 @@ scripts/     Local development helpers
 
 1. Postmark sends an inbound webhook to the web app.
 2. The web app persists the inbound message, creates a claim, stores attachments to S3, and enqueues ingest work to SQS.
-3. The worker consumes the queue message, runs extraction, optionally falls back to Textract, and persists extraction results.
+3. The worker consumes the queue message, loads organization-specific scan keywords, runs extraction, optionally falls back to Textract, and persists extraction results.
 4. The claim lands in `READY`, `REVIEW_REQUIRED`, or `ERROR`.
-5. Operators review claims in the dashboard, export filtered data, retry retryable failures, and recover stale processing claims.
+5. Operators review claims in the dashboard, export filtered data, retry retryable failures, recover stale processing claims, and tune company scan keywords from extraction settings.
 
 ## Architecture
 

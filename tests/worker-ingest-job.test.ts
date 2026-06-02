@@ -174,6 +174,38 @@ test("worker ingest job skips extraction for terminal claim statuses", async () 
   }
 });
 
+test("worker ingest job passes organization scan keywords into extraction", async () => {
+  const { organizationId, claimId, inboundMessageId, cleanup } =
+    await createClaimFixture("PROCESSING");
+  const seenKeywords: string[][] = [];
+
+  try {
+    await prisma.organizationExtractionSettings.create({
+      data: {
+        organizationId,
+        scanKeywords: ["compressor failure", "proof of purchase"],
+      },
+    });
+
+    await processClaimIngestJob(
+      prisma,
+      TEST_CONFIG,
+      buildQueueMessage({ organizationId, claimId, inboundMessageId }),
+      {
+        extractClaimDataFn: async (input) => {
+          seenKeywords.push(input.organizationScanKeywords);
+          return buildExtractionResult();
+        },
+        persistClaimExtractionOutcomeFn: async () => "REVIEW_REQUIRED",
+      },
+    );
+
+    assert.deepEqual(seenKeywords, [["compressor failure", "proof of purchase"]]);
+  } finally {
+    await cleanup();
+  }
+});
+
 test("worker ingest job ignores superseded version 3 attempts once a newer attempt exists", async () => {
   const { organizationId, claimId, inboundMessageId, cleanup } = await createClaimFixture(
     "PROCESSING",
@@ -886,6 +918,7 @@ function buildExtractionResult(
       issueSummary: "Fallback issue summary",
       retailer: null,
       warrantyStatus: "UNCLEAR",
+      keywordMatches: [],
       missingInfo: ["customer_name"],
       confidence: 0.35,
       reasoning: "test extraction",

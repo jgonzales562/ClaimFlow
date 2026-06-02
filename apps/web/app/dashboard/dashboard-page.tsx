@@ -160,9 +160,17 @@ export function createDashboardPage(dependencies: Partial<DashboardPageDependenc
           actions={
             <>
               {canAccessErrorTriage ? (
-                <LinkComponent href="/dashboard/errors" className="button button--secondary">
-                  Error Triage
-                </LinkComponent>
+                <>
+                  <LinkComponent
+                    href="/dashboard/settings/extraction"
+                    className="button button--secondary"
+                  >
+                    Extraction Settings
+                  </LinkComponent>
+                  <LinkComponent href="/dashboard/errors" className="button button--secondary">
+                    Error Triage
+                  </LinkComponent>
+                </>
               ) : null}
               <form action="/api/auth/logout" method="post">
                 <button type="submit" className="button button--primary">

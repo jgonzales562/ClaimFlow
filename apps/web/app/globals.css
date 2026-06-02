@@ -605,6 +605,10 @@ textarea.control {
   resize: vertical;
 }
 
+.control--tall {
+  min-height: 240px;
+}
+
 .button {
   display: inline-flex;
   align-items: center;

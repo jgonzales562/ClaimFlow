@@ -9,6 +9,7 @@ import {
   getClaimReviewSignal,
   mapClaimDetailError,
   mapClaimDetailNotice,
+  readClaimExtractionKeywordMatches,
   readClaimExtractionReasoning,
 } from "../apps/web/lib/claims/claim-detail-ui.ts";
 
@@ -125,6 +126,11 @@ test("claim detail event helpers format extraction and audit payloads safely", (
   assert.equal(readClaimExtractionReasoning({ reasoning: "Detailed reasoning" }), "Detailed reasoning");
   assert.equal(readClaimExtractionReasoning({ reasoning: 42 }), null);
   assert.equal(readClaimExtractionReasoning(null), null);
+  assert.deepEqual(readClaimExtractionKeywordMatches({ keywordMatches: ["RMA", " proof "] }), [
+    "RMA",
+    "proof",
+  ]);
+  assert.deepEqual(readClaimExtractionKeywordMatches({ keywordMatches: [42] }), []);
 
   assert.equal(getClaimEventTone("STATUS_TRANSITION"), "info");
   assert.equal(getClaimEventTone("MANUAL_EDIT"), "neutral");

@@ -643,6 +643,7 @@ function buildReadyExtraction(): ClaimExtractionResult {
       issueSummary: "Motor stopped spinning",
       retailer: "Target",
       warrantyStatus: "LIKELY_IN_WARRANTY",
+      keywordMatches: [],
       missingInfo: [],
       confidence: 0.97,
       reasoning: "Smoke test extraction",

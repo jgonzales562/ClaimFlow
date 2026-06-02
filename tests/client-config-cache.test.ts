@@ -55,6 +55,7 @@ test("OpenAI extraction client cache is keyed by API key", async () => {
                 issueSummary: "Unit does not power on.",
                 retailer: "Example Store",
                 warrantyStatus: "LIKELY_IN_WARRANTY",
+                keywordMatches: [],
                 missingInfo: [],
                 confidence: 0.96,
                 reasoning: "Structured extraction test response.",
@@ -90,6 +91,7 @@ test("OpenAI extraction client cache is keyed by API key", async () => {
         strippedTextReply: null,
         claimIssueSummary: null,
         supplementalText: null,
+        organizationScanKeywords: [],
       },
       {
         openAiApiKey: "key-one",
@@ -107,6 +109,7 @@ test("OpenAI extraction client cache is keyed by API key", async () => {
         strippedTextReply: null,
         claimIssueSummary: null,
         supplementalText: null,
+        organizationScanKeywords: [],
       },
       {
         openAiApiKey: "key-two",

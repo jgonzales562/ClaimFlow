@@ -1,4 +1,3 @@
-import Link from "next/link";
 import React, { type ReactNode } from "react";
 import { cx, formatPercent, type PillTone } from "@/lib/ui";
 
@@ -77,9 +76,9 @@ export function PageHero({
       <div>
         {breadcrumbHref && breadcrumbLabel ? (
           <p className="hero-breadcrumb">
-            <Link href={breadcrumbHref} className="hero-link">
+            <a href={breadcrumbHref} className="hero-link">
               {breadcrumbLabel}
-            </Link>
+            </a>
           </p>
         ) : null}
         <p className="eyebrow">{eyebrow}</p>

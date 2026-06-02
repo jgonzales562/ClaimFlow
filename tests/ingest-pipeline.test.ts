@@ -734,6 +734,7 @@ function buildExtractionResult(
       issueSummary: null,
       retailer: null,
       warrantyStatus: "UNCLEAR",
+      keywordMatches: [],
       missingInfo: [],
       confidence: 0.5,
       reasoning: "integration test",

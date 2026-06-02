@@ -12,6 +12,7 @@ import {
   getClaimReviewSignal,
   mapClaimDetailError,
   mapClaimDetailNotice,
+  readClaimExtractionKeywordMatches,
   readClaimExtractionReasoning,
 } from "@/lib/claims/claim-detail-ui";
 import { formatUtcDateTime } from "@/lib/format";
@@ -67,6 +68,9 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
   }
 
   const latestExtraction = claim.extractions[0] ?? null;
+  const extractionKeywordMatches = latestExtraction
+    ? readClaimExtractionKeywordMatches(latestExtraction.extraction)
+    : [];
   const claimReference = claim.externalClaimId ?? claim.id;
   const extractionConfidence = latestExtraction
     ? Math.round(latestExtraction.confidence * 100)
@@ -452,6 +456,22 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 <KeyValueRow
                   label="Reasoning"
                   value={readClaimExtractionReasoning(latestExtraction.extraction) ?? "-"}
+                />
+                <KeyValueRow
+                  label="Keyword Matches"
+                  value={
+                    extractionKeywordMatches.length > 0 ? (
+                      <div className="cluster">
+                        {extractionKeywordMatches.map((keyword) => (
+                          <Pill key={keyword} tone="info">
+                            {keyword}
+                          </Pill>
+                        ))}
+                      </div>
+                    ) : (
+                      "-"
+                    )
+                  }
                 />
               </div>
             ) : (

@@ -54,6 +54,7 @@ enum ClaimEventType {
 enum AuditEventType {
   CLAIM_EXPORT
   ATTACHMENT_ACCESS
+  EXTRACTION_SETTINGS_UPDATE
 }
 
 model Organization {
@@ -72,6 +73,15 @@ model Organization {
   claimEvents              ClaimEvent[]
   auditEvents              AuditEvent[]
   claimIngestQueueOutbox   ClaimIngestQueueOutbox[]
+  extractionSettings       OrganizationExtractionSettings?
+}
+
+model OrganizationExtractionSettings {
+  organizationId String       @id
+  scanKeywords   String[]     @default([])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
 }
 
 model ClaimOrganizationSummary {
@@ -266,7 +276,7 @@ model ClaimExtraction {
   inboundMessageId    String?
   provider            ClaimExtractionProvider @default(OPENAI)
   model               String
-  schemaVersion       Int                     @default(1)
+  schemaVersion       Int                     @default(2)
   confidence          Float
   extraction          Json
   rawOutput           Json
