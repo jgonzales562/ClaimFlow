@@ -39,6 +39,7 @@ export type ClaimDetailRecord = {
     model: string;
     confidence: number;
     extraction: unknown;
+    rawOutput: unknown;
     createdAt: Date;
   }>;
   events: Array<{
@@ -120,6 +121,7 @@ export async function loadClaimDetail(input: {
         model: true,
         confidence: true,
         extraction: true,
+        rawOutput: true,
         createdAt: true,
       },
     }),

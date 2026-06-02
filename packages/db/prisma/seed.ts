@@ -1,11 +1,17 @@
 import { randomBytes, scrypt as scryptCallback } from "node:crypto";
-import { promisify } from "node:util";
 import { ClaimStatus, MembershipRole, PrismaClient, WarrantyStatus } from "@prisma/client";
 
 const prisma = new PrismaClient();
-const scrypt = promisify(scryptCallback);
 const DEFAULT_SEED_ADMIN_EMAIL = "admin@claimflow.local";
 const DEFAULT_SEED_ADMIN_FULL_NAME = "ClaimFlow Admin";
+const SCRYPT_PREFIX = "scrypt";
+const SCRYPT_VERSION = "v1";
+const SCRYPT_COST = 16_384;
+const SCRYPT_BLOCK_SIZE = 8;
+const SCRYPT_PARALLELIZATION = 1;
+const SCRYPT_KEY_LENGTH = 64;
+const SCRYPT_SALT_LENGTH = 16;
+const SCRYPT_MAXMEM = 64 * 1024 * 1024;
 
 async function main(): Promise<void> {
   const seedAdmin = await resolveSeedAdminCredentials();
@@ -144,7 +150,8 @@ async function main(): Promise<void> {
       productName: "Acme ControlHub C8",
       serialNumber: "ACCH8-2120",
       purchaseDate: new Date("2025-01-08T00:00:00.000Z"),
-      issueSummary: "Claim has remained in intake processing longer than expected and should surface recovery controls.",
+      issueSummary:
+        "Claim has remained in intake processing longer than expected and should surface recovery controls.",
       retailer: "Metro Climate Parts",
       warrantyStatus: WarrantyStatus.UNCLEAR,
       missingInfo: ["installer_notes"],
@@ -461,9 +468,39 @@ async function main(): Promise<void> {
 }
 
 async function hashPassword(password: string): Promise<string> {
-  const salt = randomBytes(16);
-  const key = (await scrypt(password, salt, 64)) as Buffer;
-  return `scrypt$${salt.toString("hex")}$${key.toString("hex")}`;
+  const salt = randomBytes(SCRYPT_SALT_LENGTH);
+  const key = await deriveScryptKey(password, salt);
+  return [
+    SCRYPT_PREFIX,
+    SCRYPT_VERSION,
+    `n=${SCRYPT_COST},r=${SCRYPT_BLOCK_SIZE},p=${SCRYPT_PARALLELIZATION},l=${SCRYPT_KEY_LENGTH}`,
+    salt.toString("hex"),
+    key.toString("hex"),
+  ].join("$");
+}
+
+function deriveScryptKey(password: string, salt: Buffer): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scryptCallback(
+      password,
+      salt,
+      SCRYPT_KEY_LENGTH,
+      {
+        N: SCRYPT_COST,
+        r: SCRYPT_BLOCK_SIZE,
+        p: SCRYPT_PARALLELIZATION,
+        maxmem: SCRYPT_MAXMEM,
+      },
+      (error, derivedKey) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+
+        resolve(derivedKey);
+      },
+    );
+  });
 }
 
 async function resolveSeedAdminCredentials(): Promise<{

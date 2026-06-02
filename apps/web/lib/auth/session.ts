@@ -13,6 +13,7 @@ export function isMembershipRole(value: unknown): value is MembershipRole {
 }
 
 type SessionPayload = {
+  sessionId: string;
   userId: string;
   organizationId: string;
   role: MembershipRole;
@@ -27,16 +28,20 @@ type PendingLoginPayload = {
 
 export function createSessionToken(
   input: Omit<SessionPayload, "exp">,
-  ttlSeconds = DEFAULT_SESSION_TTL_SECONDS,
+  expiresAt = getSessionExpiresAt(),
 ): string {
   return createSignedToken({
     ...input,
-    exp: Math.floor(Date.now() / 1000) + ttlSeconds,
+    exp: Math.floor(expiresAt.getTime() / 1000),
   });
 }
 
 export function verifySessionToken(token: string): SessionPayload | null {
   return verifySignedToken(token, isSessionPayload);
+}
+
+export function getSessionExpiresAt(ttlSeconds = DEFAULT_SESSION_TTL_SECONDS): Date {
+  return new Date(Date.now() + ttlSeconds * 1_000);
 }
 
 export function createPendingLoginToken(
@@ -178,6 +183,7 @@ function isSessionPayload(payload: Partial<SessionPayload>): payload is SessionP
   }
 
   return (
+    typeof payload.sessionId === "string" &&
     typeof payload.userId === "string" &&
     typeof payload.organizationId === "string" &&
     typeof payload.exp === "number" &&

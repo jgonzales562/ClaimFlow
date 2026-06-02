@@ -77,7 +77,7 @@ test("login JSON preserves leading and trailing spaces in passwords", async () =
       receivedPassword = password;
       return password === "  correct-password  ";
     },
-    createSessionTokenFn: () => "session-token-value",
+    ...sessionStubs(),
   });
 
   const response = await handler(
@@ -264,7 +264,7 @@ test("organization selection JSON creates a session and clears the pending cooki
       redirectTo: "/dashboard/claims/claim-1?notice=resume",
       exp: 9999999999,
     }),
-    createSessionTokenFn: () => "session-token-value",
+    ...sessionStubs(),
   });
 
   const response = await handler(
@@ -306,7 +306,7 @@ test("organization selection form redirects back to the chosen dashboard path an
       redirectTo: "/dashboard/claims/claim-1?notice=resume",
       exp: 9999999999,
     }),
-    createSessionTokenFn: () => "session-token-value",
+    ...sessionStubs(),
   });
 
   const formData = new FormData();
@@ -398,7 +398,7 @@ test("login JSON returns session data and sets the session cookie on success", a
   const handler = createLoginHandler({
     findUserByEmailFn: async () => ({ ...baseUser }),
     verifyPasswordFn: async () => true,
-    createSessionTokenFn: () => "session-token-value",
+    ...sessionStubs(),
   });
 
   const response = await handler(
@@ -433,7 +433,7 @@ test("login form redirects to the dashboard and sets the session cookie on succe
   const handler = createLoginHandler({
     findUserByEmailFn: async () => ({ ...baseUser }),
     verifyPasswordFn: async () => true,
-    createSessionTokenFn: () => "session-token-value",
+    ...sessionStubs(),
   });
 
   const formData = new FormData();
@@ -458,7 +458,7 @@ test("login form redirects back to a validated dashboard path on success", async
   const handler = createLoginHandler({
     findUserByEmailFn: async () => ({ ...baseUser }),
     verifyPasswordFn: async () => true,
-    createSessionTokenFn: () => "session-token-value",
+    ...sessionStubs(),
   });
 
   const formData = new FormData();
@@ -487,7 +487,7 @@ test("login form ignores unsafe redirect targets", async () => {
   const handler = createLoginHandler({
     findUserByEmailFn: async () => ({ ...baseUser }),
     verifyPasswordFn: async () => true,
-    createSessionTokenFn: () => "session-token-value",
+    ...sessionStubs(),
   });
 
   const formData = new FormData();
@@ -555,6 +555,29 @@ test("logout rejects cross-origin requests", async () => {
   assert.equal(response.status, 403);
 });
 
+test("logout revokes the current auth session token", async () => {
+  const revokedTokens: string[] = [];
+  const handler = createLogoutHandler({
+    revokeAuthSessionTokenFn: async (token) => {
+      revokedTokens.push(token);
+      return true;
+    },
+  });
+
+  const response = await handler(
+    new Request("http://localhost/api/auth/logout", {
+      method: "POST",
+      headers: {
+        origin: "http://localhost",
+        cookie: "claimflow_session=session-token-value",
+      },
+    }),
+  );
+
+  assert.equal(response.status, 303);
+  assert.deepEqual(revokedTokens, ["session-token-value"]);
+});
+
 test("login JSON returns 429 when the login rate limiter blocks the attempt", async () => {
   const handler = createLoginHandler({
     checkLoginRateLimitFn: async () => ({
@@ -578,6 +601,16 @@ test("login JSON returns 429 when the login rate limiter blocks the attempt", as
     error: "Too many sign-in attempts. Try again later.",
   });
 });
+
+function sessionStubs() {
+  return {
+    createSessionTokenFn: () => "session-token-value",
+    createAuthSessionFn: async (input: { expiresAt: Date }) => ({
+      id: "session-row-value",
+      expiresAt: input.expiresAt,
+    }),
+  };
+}
 
 function readSetCookieHeaders(response: Response): string[] {
   const headers = response.headers as Headers & { getSetCookie?: () => string[] };

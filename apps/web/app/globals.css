@@ -867,6 +867,12 @@ textarea.control {
   color: var(--danger);
 }
 
+.notice--warning {
+  border-color: rgba(154, 106, 11, 0.18);
+  background: rgba(154, 106, 11, 0.1);
+  color: var(--warning);
+}
+
 .kv-row {
   display: grid;
   gap: 4px;

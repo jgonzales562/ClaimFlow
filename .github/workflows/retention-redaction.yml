@@ -1,0 +1,39 @@
+name: Retention Redaction
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 9 * * *"
+
+concurrency:
+  group: retention-redaction
+  cancel-in-progress: false
+
+jobs:
+  redact:
+    if: ${{ secrets.DATABASE_URL != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9.15.4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Redact expired claim data
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          CLAIMFLOW_RETENTION_BATCH_SIZE: ${{ vars.CLAIMFLOW_RETENTION_BATCH_SIZE || '500' }}
+        run: node scripts/redact-expired-claim-data.mjs

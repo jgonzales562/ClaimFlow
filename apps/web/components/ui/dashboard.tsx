@@ -51,7 +51,7 @@ type GlanceCardProps = {
 };
 
 type NoticeBannerProps = {
-  tone: "success" | "danger";
+  tone: "success" | "danger" | "warning";
   children: ReactNode;
 };
 
@@ -182,11 +182,7 @@ export function GlanceCard({ label, value, copy, tone }: GlanceCardProps) {
 }
 
 export function NoticeBanner({ tone, children }: NoticeBannerProps) {
-  return (
-    <p className={cx("notice", tone === "success" ? "notice--success" : "notice--danger")}>
-      {children}
-    </p>
-  );
+  return <p className={cx("notice", `notice--${tone}`)}>{children}</p>;
 }
 
 export function KeyValueRow({ label, value }: KeyValueRowProps) {

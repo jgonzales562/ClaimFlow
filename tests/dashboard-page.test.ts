@@ -79,6 +79,7 @@ test("dashboard page renders the outbox posture panel for admins", async () => {
   assert.match(html, /Queue outbox posture/);
   assert.match(html, /Dispatch backlog/);
   assert.match(html, /Extraction Settings/);
+  assert.match(html, /Audit History/);
   assert.match(html, /Due now/);
   assert.match(html, /Pending total/);
   assert.match(html, /11 min/);
@@ -119,6 +120,7 @@ test("dashboard page hides the outbox posture panel for non-admin roles", async 
   assert.doesNotMatch(html, /Queue outbox posture/);
   assert.doesNotMatch(html, /Dispatch backlog/);
   assert.doesNotMatch(html, /Extraction Settings/);
+  assert.doesNotMatch(html, /Audit History/);
   assert.equal(pageSummaryCalls, 1);
   assert.equal(operationalSummaryCalls, 0);
 });

@@ -1,6 +1,7 @@
 import { INBOUND_MESSAGE_RAW_PAYLOAD_SCHEMA_VERSION, prisma } from "@claimflow/db";
 import type { Prisma } from "@prisma/client";
-import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
+import { isIP } from "node:net";
 import path from "node:path";
 import {
   getPostmarkAttachments,
@@ -88,6 +89,14 @@ type AttachmentScanResult =
       reason: string;
     };
 
+type AttachmentScanInput = {
+  filename: string;
+  contentType: string | null;
+  byteSize: number;
+  checksumSha256: string;
+  content: Buffer;
+};
+
 export function createPostmarkInboundHandler(
   dependencies: PostmarkInboundRouteDependencies = {},
 ): (request: Request) => Promise<Response> {
@@ -114,6 +123,10 @@ export function createPostmarkInboundHandler(
       return response;
     }
 
+    if (!isWebhookIpAllowed(request)) {
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const authorization = authorizeRequest(request);
     if (authorization === "misconfigured") {
       logErrorFn("webhook_auth_not_configured", {
@@ -126,9 +139,20 @@ export function createPostmarkInboundHandler(
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
 
+    let rawBody = "";
+    try {
+      rawBody = await request.text();
+    } catch {
+      return Response.json({ error: "Invalid request body" }, { status: 400 });
+    }
+
+    if (!isWebhookSignatureValid(request, rawBody)) {
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     let payload: unknown;
     try {
-      payload = await request.json();
+      payload = JSON.parse(rawBody);
     } catch {
       return Response.json({ error: "Invalid JSON payload" }, { status: 400 });
     }
@@ -384,6 +408,112 @@ function secureCompare(a: string, b: string): boolean {
   const digestA = createHash("sha256").update(a).digest();
   const digestB = createHash("sha256").update(b).digest();
   return timingSafeEqual(digestA, digestB);
+}
+
+function isWebhookIpAllowed(request: Request): boolean {
+  const allowedRules = readWebhookAllowedIpRules();
+  if (allowedRules.length === 0) {
+    return true;
+  }
+
+  const ip = readClientIp(request);
+  return allowedRules.some((rule) => matchesIpRule(ip, rule));
+}
+
+function readWebhookAllowedIpRules(): string[] {
+  const raw = process.env.POSTMARK_WEBHOOK_ALLOWED_IPS?.trim();
+  if (!raw) {
+    return [];
+  }
+
+  return raw
+    .split(",")
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+}
+
+function matchesIpRule(ip: string, rule: string): boolean {
+  if (!rule.includes("/")) {
+    return ip === rule;
+  }
+
+  const [rangeIp, prefixRaw] = rule.split("/");
+  const prefix = Number.parseInt(prefixRaw ?? "", 10);
+  if (!rangeIp || !Number.isInteger(prefix)) {
+    return false;
+  }
+
+  if (isIP(ip) !== 4 || isIP(rangeIp) !== 4) {
+    return false;
+  }
+
+  return isIpv4InCidr(ip, rangeIp, prefix);
+}
+
+function isIpv4InCidr(ip: string, rangeIp: string, prefix: number): boolean {
+  if (prefix < 0 || prefix > 32) {
+    return false;
+  }
+
+  const ipValue = ipv4ToInteger(ip);
+  const rangeValue = ipv4ToInteger(rangeIp);
+  if (ipValue === null || rangeValue === null) {
+    return false;
+  }
+
+  const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0;
+  return (ipValue & mask) === (rangeValue & mask);
+}
+
+function ipv4ToInteger(value: string): number | null {
+  const parts = value.split(".");
+  if (parts.length !== 4) {
+    return null;
+  }
+
+  let result = 0;
+  for (const part of parts) {
+    const parsed = Number.parseInt(part, 10);
+    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 255 || String(parsed) !== part) {
+      return null;
+    }
+
+    result = (result << 8) + parsed;
+  }
+
+  return result >>> 0;
+}
+
+function isWebhookSignatureValid(request: Request, rawBody: string): boolean {
+  const secret = process.env.POSTMARK_WEBHOOK_SIGNATURE_SECRET?.trim();
+  if (!secret) {
+    return true;
+  }
+
+  const headerName =
+    process.env.POSTMARK_WEBHOOK_SIGNATURE_HEADER?.trim() || "x-postmark-signature";
+  const providedSignature = request.headers.get(headerName);
+  if (!providedSignature) {
+    return false;
+  }
+
+  const normalized = normalizeWebhookSignature(providedSignature);
+  const expectedHex = createHmac("sha256", secret).update(rawBody).digest("hex");
+  const expectedBase64 = createHmac("sha256", secret).update(rawBody).digest("base64");
+  const expectedBase64Url = createHmac("sha256", secret).update(rawBody).digest("base64url");
+
+  return (
+    secureCompare(normalized, expectedHex) ||
+    secureCompare(normalized, expectedBase64) ||
+    secureCompare(normalized, expectedBase64Url)
+  );
+}
+
+function normalizeWebhookSignature(value: string): string {
+  return value
+    .trim()
+    .replace(/^sha256=/i, "")
+    .replace(/^hmac-sha256=/i, "");
 }
 
 async function checkWebhookRateLimit(request: Request): Promise<RateLimitDecision> {
@@ -751,6 +881,7 @@ async function prepareAttachmentPersistence(
     contentType: attachment.contentType,
     byteSize: fileBuffer.length,
     checksumSha256,
+    content: fileBuffer,
   });
   if (scanResult.disposition === "quarantine") {
     const message = `Attachment quarantined: ${scanResult.reason}`;
@@ -1019,13 +1150,84 @@ function isAllowedAttachmentType(
   return false;
 }
 
-async function scanAttachment(_input: {
-  filename: string;
-  contentType: string | null;
-  byteSize: number;
-  checksumSha256: string;
-}): Promise<AttachmentScanResult> {
-  return { disposition: "clean" };
+async function scanAttachment(input: AttachmentScanInput): Promise<AttachmentScanResult> {
+  const scannerUrl = process.env.ATTACHMENT_MALWARE_SCANNER_URL?.trim();
+  if (!scannerUrl) {
+    return isAttachmentMalwareScannerRequired()
+      ? {
+          disposition: "quarantine",
+          reason: "Attachment malware scanner is not configured.",
+        }
+      : { disposition: "clean" };
+  }
+
+  try {
+    const headers = new Headers({
+      "content-type": "application/json",
+    });
+    const bearerToken = process.env.ATTACHMENT_MALWARE_SCANNER_BEARER_TOKEN?.trim();
+    if (bearerToken) {
+      headers.set("authorization", `Bearer ${bearerToken}`);
+    }
+
+    const response = await fetch(scannerUrl, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        filename: input.filename,
+        contentType: input.contentType,
+        byteSize: input.byteSize,
+        checksumSha256: input.checksumSha256,
+        contentBase64: input.content.toString("base64"),
+      }),
+    });
+
+    if (!response.ok) {
+      return {
+        disposition: "quarantine",
+        reason: `Attachment malware scanner returned HTTP ${response.status}.`,
+      };
+    }
+
+    const result = (await response.json()) as unknown;
+    if (!isAttachmentScanResponse(result)) {
+      return {
+        disposition: "quarantine",
+        reason: "Attachment malware scanner returned an invalid response.",
+      };
+    }
+
+    return result;
+  } catch (error: unknown) {
+    return {
+      disposition: "quarantine",
+      reason: `Attachment malware scanner failed: ${extractErrorMessage(error)}`,
+    };
+  }
+}
+
+function isAttachmentScanResponse(value: unknown): value is AttachmentScanResult {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const disposition = (value as Record<string, unknown>).disposition;
+  if (disposition === "clean") {
+    return true;
+  }
+
+  return (
+    disposition === "quarantine" && typeof (value as Record<string, unknown>).reason === "string"
+  );
+}
+
+function isAttachmentMalwareScannerRequired(): boolean {
+  const raw = process.env.ATTACHMENT_MALWARE_SCANNER_REQUIRED?.trim().toLowerCase();
+  if (!raw) {
+    return process.env.NODE_ENV === "production";
+  }
+
+  return raw === "true" || raw === "1" || raw === "yes";
 }
 
 function getAttachmentPolicy(): AttachmentPolicy {

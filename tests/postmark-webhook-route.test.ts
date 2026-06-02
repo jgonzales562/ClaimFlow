@@ -1,6 +1,6 @@
 import { after, test } from "node:test";
 import assert from "node:assert/strict";
-import { randomUUID } from "node:crypto";
+import { createHmac, randomUUID } from "node:crypto";
 import { POST } from "../apps/web/app/api/webhooks/postmark/inbound/route.ts";
 import { createPostmarkInboundHandler } from "../apps/web/lib/postmark/inbound-webhook.ts";
 import { prisma } from "../packages/db/src/index.ts";
@@ -79,6 +79,77 @@ test("postmark webhook returns 429 when rate limited before auth", async () => {
   assert.deepEqual(await response.json(), {
     error: "Too many webhook requests. Try again later.",
   });
+});
+
+test("postmark webhook rejects requests outside the configured IP allowlist", async () => {
+  await withEnv(
+    {
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+      POSTMARK_WEBHOOK_ALLOWED_IPS: "203.0.113.10,198.51.100.0/24",
+    },
+    async () => {
+      const response = await POST(
+        new Request("http://localhost/api/webhooks/postmark/inbound", {
+          method: "POST",
+          body: JSON.stringify({ MessageID: `message-${randomUUID()}` }),
+          headers: {
+            authorization: `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`,
+            "content-type": "application/json",
+            "x-forwarded-for": "192.0.2.10",
+          },
+        }),
+      );
+
+      assert.equal(response.status, 403);
+      assert.deepEqual(await response.json(), { error: "Forbidden" });
+    },
+  );
+});
+
+test("postmark webhook verifies configured HMAC body signatures", async () => {
+  const body = JSON.stringify({
+    MessageID: `message-${randomUUID()}`,
+    From: "Customer <customer@example.com>",
+    To: "claims@example.com",
+  });
+  const signature = createHmac("sha256", "signature-secret").update(body).digest("hex");
+
+  await withEnv(
+    {
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+      POSTMARK_WEBHOOK_SIGNATURE_SECRET: "signature-secret",
+    },
+    async () => {
+      const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+      const accepted = await POST(
+        new Request("http://localhost/api/webhooks/postmark/inbound", {
+          method: "POST",
+          body,
+          headers: {
+            authorization: authHeader,
+            "content-type": "application/json",
+            "x-postmark-signature": signature,
+          },
+        }),
+      );
+      const rejected = await POST(
+        new Request("http://localhost/api/webhooks/postmark/inbound", {
+          method: "POST",
+          body,
+          headers: {
+            authorization: authHeader,
+            "content-type": "application/json",
+            "x-postmark-signature": "wrong-signature",
+          },
+        }),
+      );
+
+      assert.equal(accepted.status, 422);
+      assert.equal(rejected.status, 403);
+    },
+  );
 });
 
 test("postmark webhook uses the default org fallback only when explicitly enabled", async () => {
@@ -591,6 +662,103 @@ test("postmark webhook records disallowed attachments as failed without uploadin
         assert.equal(attachment.uploadStatus, "FAILED");
         assert.equal(attachment.errorMessage, "Attachment content type is not allowed.");
         assert.ok(attachment.retentionExpiresAt instanceof Date);
+      } finally {
+        await prisma.organization.delete({
+          where: {
+            id: organization.id,
+          },
+        });
+      }
+    },
+  );
+});
+
+test("postmark webhook quarantines attachments when malware scanner enforcement is not configured", async () => {
+  const suffix = randomUUID();
+  const mailboxHash = `mailbox-${suffix}`;
+  const providerMessageId = `message-${suffix}`;
+  const authHeader = `Basic ${Buffer.from("route-test-user:route-test-pass").toString("base64")}`;
+  const storedObjects: Array<{ key: string }> = [];
+
+  await withEnv(
+    {
+      POSTMARK_WEBHOOK_BASIC_AUTH_USER: "route-test-user",
+      POSTMARK_WEBHOOK_BASIC_AUTH_PASS: "route-test-pass",
+      ATTACHMENT_MALWARE_SCANNER_REQUIRED: "true",
+      ATTACHMENT_MALWARE_SCANNER_URL: undefined,
+    },
+    async () => {
+      const handler = createPostmarkInboundHandler({
+        prismaClient: prisma,
+        maybeEnqueueClaimForProcessingFn: async () => ({
+          reason: "queue_not_configured",
+        }),
+        putAttachmentObjectFn: async (input) => {
+          storedObjects.push({ key: input.key });
+          return {
+            bucket: "test-bucket",
+            key: input.key,
+          };
+        },
+      });
+
+      const organization = await prisma.organization.create({
+        data: {
+          name: `Webhook Malware Scanner Test ${suffix}`,
+          slug: `webhook-malware-scanner-test-${suffix}`,
+          integrationMailbox: {
+            create: {
+              provider: "POSTMARK",
+              mailboxHash,
+              emailAddress: `claims+${suffix}@example.com`,
+            },
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      try {
+        const response = await handler(
+          new Request("http://localhost/api/webhooks/postmark/inbound", {
+            method: "POST",
+            body: JSON.stringify({
+              MessageID: providerMessageId,
+              MailboxHash: mailboxHash,
+              From: `Customer <customer-${suffix}@example.com>`,
+              To: `claims+${suffix}@example.com`,
+              Subject: "Receipt attached",
+              TextBody: "Receipt attached.",
+              Attachments: [
+                {
+                  Name: "receipt.pdf",
+                  Content: Buffer.from("safe-looking-pdf").toString("base64"),
+                  ContentType: "application/pdf",
+                  ContentLength: 16,
+                },
+              ],
+            }),
+            headers: {
+              authorization: authHeader,
+              "content-type": "application/json",
+            },
+          }),
+        );
+
+        assert.equal(response.status, 200);
+        assert.deepEqual((await response.json()).attachments, {
+          received: 1,
+          stored: 0,
+          failed: 1,
+          errors: [
+            {
+              filename: "receipt.pdf",
+              message: "Attachment quarantined: Attachment malware scanner is not configured.",
+            },
+          ],
+        });
+        assert.equal(storedObjects.length, 0);
       } finally {
         await prisma.organization.delete({
           where: {

@@ -12,10 +12,7 @@ import {
 } from "@/components/ui/dashboard";
 import { getCachedAuthContext, hasMinimumRole } from "@/lib/auth/server";
 import { parsePageDirection, parseTimestampCursor } from "@/lib/claims/cursor-pagination";
-import {
-  DEFAULT_CLAIMS_EXPORT_LIMIT,
-  DEFAULT_DASHBOARD_PAGE_SIZE,
-} from "@/lib/claims/config";
+import { DEFAULT_CLAIMS_EXPORT_LIMIT, DEFAULT_DASHBOARD_PAGE_SIZE } from "@/lib/claims/config";
 import { listDashboardClaimWindow } from "@/lib/claims/dashboard-claims";
 import {
   CLAIM_STATUSES,
@@ -166,6 +163,9 @@ export function createDashboardPage(dependencies: Partial<DashboardPageDependenc
                     className="button button--secondary"
                   >
                     Extraction Settings
+                  </LinkComponent>
+                  <LinkComponent href="/dashboard/audit" className="button button--secondary">
+                    Audit History
                   </LinkComponent>
                   <LinkComponent href="/dashboard/errors" className="button button--secondary">
                     Error Triage

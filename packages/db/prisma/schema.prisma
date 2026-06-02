@@ -74,6 +74,7 @@ model Organization {
   auditEvents              AuditEvent[]
   claimIngestQueueOutbox   ClaimIngestQueueOutbox[]
   extractionSettings       OrganizationExtractionSettings?
+  authSessions             AuthSession[]
 }
 
 model OrganizationExtractionSettings {
@@ -108,6 +109,35 @@ model User {
   createdClaims Claim[]      @relation("ClaimCreatedBy")
   claimEvents   ClaimEvent[] @relation("ClaimEventActor")
   auditEvents   AuditEvent[] @relation("AuditEventActor")
+  authSessions  AuthSession[]
+}
+
+model AuthSession {
+  id             String         @id
+  userId         String
+  organizationId String
+  role           MembershipRole
+  createdAt      DateTime       @default(now())
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  lastSeenAt     DateTime?
+  user           User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization   Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([userId, expiresAt])
+  @@index([organizationId, expiresAt])
+  @@index([revokedAt, expiresAt])
+}
+
+model RateLimitBucket {
+  key           String   @id
+  count         Int      @default(0)
+  windowStartAt DateTime
+  expiresAt     DateTime
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([expiresAt])
 }
 
 model Membership {

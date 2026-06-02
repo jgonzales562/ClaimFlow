@@ -14,6 +14,14 @@ export type ClaimProcessingLeaseSignal = {
   tone: PillTone;
 };
 
+export type ClaimExtractionModeSignal = {
+  label: string;
+  title: string;
+  copy: string;
+  tone: PillTone;
+  degraded: boolean;
+};
+
 export function getClaimEventTone(eventType: string): "neutral" | "info" {
   return eventType === "STATUS_TRANSITION" ? "info" : "neutral";
 }
@@ -136,6 +144,52 @@ export function getClaimProcessingLeaseSignal(input: {
   };
 }
 
+export function getClaimExtractionModeSignal(input: {
+  provider: string;
+  model: string;
+  rawOutput: unknown;
+}): ClaimExtractionModeSignal {
+  const source = readClaimExtractionSource(input.rawOutput);
+
+  if (source === "fallback_local_textract") {
+    return {
+      label: "Heuristic + Textract",
+      title: "Local fallback with OCR",
+      copy: "This extraction used local heuristics after OCR fallback and should be manually verified.",
+      tone: "danger",
+      degraded: true,
+    };
+  }
+
+  if (input.provider === "FALLBACK" || source === "fallback_local") {
+    return {
+      label: "Heuristic fallback",
+      title: "Local heuristic output",
+      copy: "This extraction was produced without AI review because model extraction was unavailable.",
+      tone: "danger",
+      degraded: true,
+    };
+  }
+
+  if (source === "textract_fallback") {
+    return {
+      label: "Textract fallback",
+      title: "OCR fallback selected",
+      copy: "The selected extraction came from a second pass using attachment OCR context.",
+      tone: "warning",
+      degraded: true,
+    };
+  }
+
+  return {
+    label: "OpenAI direct",
+    title: "AI extraction",
+    copy: `The selected extraction was produced by ${input.model}.`,
+    tone: "success",
+    degraded: false,
+  };
+}
+
 export function mapClaimDetailNotice(value: string | null): string | null {
   switch (value) {
     case "claim_updated":
@@ -209,6 +263,15 @@ export function readClaimExtractionKeywordMatches(value: unknown): string[] {
     .filter((keyword): keyword is string => typeof keyword === "string")
     .map((keyword) => keyword.trim())
     .filter((keyword) => keyword.length > 0);
+}
+
+export function readClaimExtractionSource(value: unknown): string | null {
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+
+  const source = (value as Record<string, unknown>).source;
+  return typeof source === "string" ? source : null;
 }
 
 export function describeClaimEvent(eventType: string, payload: unknown): string {

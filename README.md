@@ -10,6 +10,8 @@ It accepts inbound claim emails, stores attachments, runs automated extraction w
 - The repo also includes hardening beyond the original V1 plan:
   - same-origin checks for cookie-authenticated mutations
   - login and webhook rate limiting hooks
+  - shared database-backed rate limiting
+  - server-side auth session revocation
   - attachment count, size, type, and scanner guardrails
   - raw payload redaction and retention metadata
   - durable export and attachment-access audit events
@@ -155,7 +157,11 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 - `CLAIMFLOW_SEED_ADMIN_PASSWORD`
 - `POSTMARK_WEBHOOK_BASIC_AUTH_USER`
 - `POSTMARK_WEBHOOK_BASIC_AUTH_PASS`
+- `POSTMARK_WEBHOOK_ALLOWED_IPS`
+- `POSTMARK_WEBHOOK_SIGNATURE_SECRET`
 - `POSTMARK_WEBHOOK_RATE_LIMIT_ATTEMPTS`
+- `ATTACHMENT_MALWARE_SCANNER_REQUIRED`
+- `ATTACHMENT_MALWARE_SCANNER_URL`
 - `POSTMARK_MAX_ATTACHMENTS`
 - `POSTMARK_MAX_ATTACHMENT_BYTES`
 - `POSTMARK_MAX_TOTAL_ATTACHMENT_BYTES`
@@ -164,6 +170,7 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 - `POSTMARK_ALLOW_DEFAULT_ORG_FALLBACK`
 - `LOGIN_RATE_LIMIT_ATTEMPTS`
 - `LOGIN_RATE_LIMIT_WINDOW_SECONDS`
+- `CLAIMFLOW_RATE_LIMIT_STORAGE`
 - `CLAIMFLOW_RAW_DATA_RETENTION_DAYS`
 - `CLAIMFLOW_ATTACHMENT_RETENTION_DAYS`
 - `AWS_REGION`
@@ -185,9 +192,10 @@ Use [.env.example](.env.example) as the source of truth. The most important sett
 
 ## Production Hardening Checklist
 
-- Put login and webhook rate limiting behind shared Redis/KV or edge/WAF storage in multi-instance deployments.
-- Replace the default clean attachment scanner hook with malware scanning before storing production attachments.
-- Run `pnpm ops:redact-expired-data` on a schedule and pair attachment row deletion marks with S3 lifecycle expiration.
+- Keep `CLAIMFLOW_RATE_LIMIT_STORAGE=database` or another shared rate-limit store in multi-instance deployments.
+- Configure `ATTACHMENT_MALWARE_SCANNER_URL` and keep scanner enforcement enabled before storing production attachments.
+- Configure the `Retention Redaction` scheduled workflow with a production `DATABASE_URL` secret, and pair attachment row deletion marks with S3 lifecycle expiration.
+- Configure `POSTMARK_WEBHOOK_ALLOWED_IPS` or `POSTMARK_WEBHOOK_SIGNATURE_SECRET` when the deployment environment can support source verification.
 - Run `pnpm ops:reconcile-summaries -- --dry-run` from monitoring or scheduled operations, and reconcile drift with `pnpm ops:reconcile-summaries`.
 - Review the CSP in `apps/web/next.config.ts` before tightening `script-src` for a production hosting target.
 - Keep `POSTMARK_ALLOW_DEFAULT_ORG_FALLBACK=false` outside local development.

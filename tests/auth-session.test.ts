@@ -17,6 +17,7 @@ test("session tokens require SESSION_SECRET outside test environments", () => {
       assert.throws(
         () =>
           createSessionToken({
+            sessionId: "session-1",
             userId: "user-1",
             organizationId: "org-1",
             role: "ADMIN",
@@ -35,6 +36,7 @@ test("session tokens use a test-only fallback secret when SESSION_SECRET is abse
     },
     () => {
       const token = createSessionToken({
+        sessionId: "session-1",
         userId: "user-1",
         organizationId: "org-1",
         role: "ADMIN",
@@ -42,6 +44,7 @@ test("session tokens use a test-only fallback secret when SESSION_SECRET is abse
 
       const payload = verifySessionToken(token);
       assert.deepEqual(payload, {
+        sessionId: "session-1",
         userId: "user-1",
         organizationId: "org-1",
         role: "ADMIN",

@@ -35,6 +35,25 @@ async function resolveAuthContext(): Promise<AuthContext | null> {
     return null;
   }
 
+  const session = await prisma.authSession.findFirst({
+    where: {
+      id: payload.sessionId,
+      userId: payload.userId,
+      organizationId: payload.organizationId,
+      revokedAt: null,
+      expiresAt: {
+        gt: new Date(),
+      },
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (!session) {
+    return null;
+  }
+
   const membership = await prisma.membership.findUnique({
     where: {
       organizationId_userId: {

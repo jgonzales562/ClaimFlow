@@ -4,6 +4,7 @@ import {
   describeClaimEvent,
   formatClaimProcessingAttempt,
   formatClaimAttachmentBytes,
+  getClaimExtractionModeSignal,
   getClaimEventTone,
   getClaimProcessingLeaseSignal,
   getClaimReviewSignal,
@@ -123,7 +124,10 @@ test("claim detail processing helpers describe attempt and lease posture safely"
 });
 
 test("claim detail event helpers format extraction and audit payloads safely", () => {
-  assert.equal(readClaimExtractionReasoning({ reasoning: "Detailed reasoning" }), "Detailed reasoning");
+  assert.equal(
+    readClaimExtractionReasoning({ reasoning: "Detailed reasoning" }),
+    "Detailed reasoning",
+  );
   assert.equal(readClaimExtractionReasoning({ reasoning: 42 }), null);
   assert.equal(readClaimExtractionReasoning(null), null);
   assert.deepEqual(readClaimExtractionKeywordMatches({ keywordMatches: ["RMA", " proof "] }), [
@@ -131,6 +135,38 @@ test("claim detail event helpers format extraction and audit payloads safely", (
     "proof",
   ]);
   assert.deepEqual(readClaimExtractionKeywordMatches({ keywordMatches: [42] }), []);
+  assert.deepEqual(
+    getClaimExtractionModeSignal({ provider: "OPENAI", model: "gpt-test", rawOutput: {} }),
+    {
+      label: "OpenAI direct",
+      title: "AI extraction",
+      copy: "The selected extraction was produced by gpt-test.",
+      tone: "success",
+      degraded: false,
+    },
+  );
+  assert.deepEqual(
+    getClaimExtractionModeSignal({
+      provider: "OPENAI",
+      model: "gpt-test",
+      rawOutput: { source: "textract_fallback" },
+    }),
+    {
+      label: "Textract fallback",
+      title: "OCR fallback selected",
+      copy: "The selected extraction came from a second pass using attachment OCR context.",
+      tone: "warning",
+      degraded: true,
+    },
+  );
+  assert.equal(
+    getClaimExtractionModeSignal({
+      provider: "FALLBACK",
+      model: "fallback-local-heuristic-v1",
+      rawOutput: { source: "fallback_local" },
+    }).label,
+    "Heuristic fallback",
+  );
 
   assert.equal(getClaimEventTone("STATUS_TRANSITION"), "info");
   assert.equal(getClaimEventTone("MANUAL_EDIT"), "neutral");

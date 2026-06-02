@@ -7,6 +7,7 @@ import {
   describeClaimEvent,
   formatClaimProcessingAttempt,
   formatClaimAttachmentBytes,
+  getClaimExtractionModeSignal,
   getClaimEventTone,
   getClaimProcessingLeaseSignal,
   getClaimReviewSignal,
@@ -75,6 +76,13 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
   const extractionConfidence = latestExtraction
     ? Math.round(latestExtraction.confidence * 100)
     : null;
+  const extractionModeSignal = latestExtraction
+    ? getClaimExtractionModeSignal({
+        provider: latestExtraction.provider,
+        model: latestExtraction.model,
+        rawOutput: latestExtraction.rawOutput,
+      })
+    : null;
   const reviewSignal = getClaimReviewSignal(
     claim.status,
     claim.missingInfo.length,
@@ -110,6 +118,11 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
 
       {notice ? <NoticeBanner tone="success">{notice}</NoticeBanner> : null}
       {error ? <NoticeBanner tone="danger">{error}</NoticeBanner> : null}
+      {extractionModeSignal?.degraded ? (
+        <NoticeBanner tone="warning">
+          {extractionModeSignal.title}: {extractionModeSignal.copy}
+        </NoticeBanner>
+      ) : null}
 
       <section className="summary-strip">
         <StatCard
@@ -404,7 +417,10 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
             copy="Core identifiers and intake metadata for this claim record."
           >
             <div className="kv-grid">
-              <KeyValueRow label="Claim ID" value={<span className="mono-text">{claimReference}</span>} />
+              <KeyValueRow
+                label="Claim ID"
+                value={<span className="mono-text">{claimReference}</span>}
+              />
               <KeyValueRow label="Source Email" value={claim.sourceEmail ?? "-"} />
               <KeyValueRow
                 label="Purchase Date"
@@ -414,24 +430,32 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
               <KeyValueRow
                 label="Lease Claimed"
                 value={
-                  claim.processingLeaseClaimedAt
-                    ? (
-                        <span className="mono-text mono-text--quiet">
-                          {formatUtcDateTime(claim.processingLeaseClaimedAt)}
-                        </span>
-                      )
-                    : claim.status === "PROCESSING" && claim.processingLeaseToken
-                      ? "Pending worker claim"
-                      : "-"
+                  claim.processingLeaseClaimedAt ? (
+                    <span className="mono-text mono-text--quiet">
+                      {formatUtcDateTime(claim.processingLeaseClaimedAt)}
+                    </span>
+                  ) : claim.status === "PROCESSING" && claim.processingLeaseToken ? (
+                    "Pending worker claim"
+                  ) : (
+                    "-"
+                  )
                 }
               />
               <KeyValueRow
                 label="Created"
-                value={<span className="mono-text mono-text--quiet">{formatUtcDateTime(claim.createdAt)}</span>}
+                value={
+                  <span className="mono-text mono-text--quiet">
+                    {formatUtcDateTime(claim.createdAt)}
+                  </span>
+                }
               />
               <KeyValueRow
                 label="Updated"
-                value={<span className="mono-text mono-text--quiet">{formatUtcDateTime(claim.updatedAt)}</span>}
+                value={
+                  <span className="mono-text mono-text--quiet">
+                    {formatUtcDateTime(claim.updatedAt)}
+                  </span>
+                }
               />
             </div>
           </PanelSection>
@@ -444,6 +468,16 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
             {latestExtraction ? (
               <div className="kv-grid">
                 <KeyValueRow label="Provider" value={latestExtraction.provider} />
+                <KeyValueRow
+                  label="Mode"
+                  value={
+                    extractionModeSignal ? (
+                      <Pill tone={extractionModeSignal.tone}>{extractionModeSignal.label}</Pill>
+                    ) : (
+                      "-"
+                    )
+                  }
+                />
                 <KeyValueRow label="Model" value={latestExtraction.model} />
                 <KeyValueRow
                   label="Confidence"
@@ -576,7 +610,10 @@ export default async function ClaimDetailPage({ params, searchParams }: ClaimDet
                 </tr>
               ) : (
                 claim.events.map((event) => (
-                  <tr key={event.id} className={`data-row data-row--${getClaimEventTone(event.eventType)}`}>
+                  <tr
+                    key={event.id}
+                    className={`data-row data-row--${getClaimEventTone(event.eventType)}`}
+                  >
                     <td data-label="Time">
                       <span className="mono-text mono-text--quiet">
                         {formatUtcDateTime(event.createdAt)}

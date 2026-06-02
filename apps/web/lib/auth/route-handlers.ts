@@ -14,6 +14,7 @@ import {
   getExpiredPendingLoginCookieOptions,
   getExpiredSessionCookieOptions,
   getPendingLoginCookieOptions,
+  getSessionExpiresAt,
   getSessionCookieOptions,
   isMembershipRole,
   PENDING_LOGIN_COOKIE_NAME,
@@ -21,6 +22,7 @@ import {
   verifyPendingLoginToken,
   type MembershipRole,
 } from "./session";
+import { createAuthSession, revokeAuthSessionToken } from "./session-store";
 
 const INVALID_CREDENTIALS_MESSAGE = "Invalid email or password.";
 const INVALID_ORGANIZATION_SELECTION_MESSAGE = "Select a valid organization to continue.";
@@ -86,8 +88,10 @@ type LoginDependencies = {
   findUserByIdFn?: (userId: string) => Promise<LoginUserRecord | null>;
   verifyPasswordFn?: typeof verifyPassword;
   createSessionTokenFn?: typeof createSessionToken;
+  createAuthSessionFn?: typeof createAuthSession;
   createPendingLoginTokenFn?: typeof createPendingLoginToken;
   verifyPendingLoginTokenFn?: typeof verifyPendingLoginToken;
+  getSessionExpiresAtFn?: typeof getSessionExpiresAt;
   getSessionCookieOptionsFn?: typeof getSessionCookieOptions;
   getPendingLoginCookieOptionsFn?: typeof getPendingLoginCookieOptions;
   getExpiredPendingLoginCookieOptionsFn?: typeof getExpiredPendingLoginCookieOptions;
@@ -101,6 +105,7 @@ type LogoutDependencies = {
   getExpiredSessionCookieOptionsFn?: typeof getExpiredSessionCookieOptions;
   getExpiredPendingLoginCookieOptionsFn?: typeof getExpiredPendingLoginCookieOptions;
   assertSameOriginRequestFn?: typeof assertSameOriginRequest;
+  revokeAuthSessionTokenFn?: typeof revokeAuthSessionToken;
 };
 
 type ParsedFormLoginRequest = {
@@ -146,10 +151,12 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
       }));
   const verifyPasswordFn = dependencies.verifyPasswordFn ?? verifyPassword;
   const createSessionTokenFn = dependencies.createSessionTokenFn ?? createSessionToken;
+  const createAuthSessionFn = dependencies.createAuthSessionFn ?? createAuthSession;
   const createPendingLoginTokenFn =
     dependencies.createPendingLoginTokenFn ?? createPendingLoginToken;
   const verifyPendingLoginTokenFn =
     dependencies.verifyPendingLoginTokenFn ?? verifyPendingLoginToken;
+  const getSessionExpiresAtFn = dependencies.getSessionExpiresAtFn ?? getSessionExpiresAt;
   const getSessionCookieOptionsFn =
     dependencies.getSessionCookieOptionsFn ?? getSessionCookieOptions;
   const getPendingLoginCookieOptionsFn =
@@ -170,7 +177,9 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
         isJsonRequest: true,
         userLoader: findUserByIdFn,
         createSessionTokenFn,
+        createAuthSessionFn,
         verifyPendingLoginTokenFn,
+        getSessionExpiresAtFn,
         getSessionCookieOptionsFn,
         getExpiredPendingLoginCookieOptionsFn,
         organizationId: jsonRequest.organizationId,
@@ -185,7 +194,9 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
         isJsonRequest: false,
         userLoader: findUserByIdFn,
         createSessionTokenFn,
+        createAuthSessionFn,
         verifyPendingLoginTokenFn,
+        getSessionExpiresAtFn,
         getSessionCookieOptionsFn,
         getExpiredPendingLoginCookieOptionsFn,
         organizationId: formRequest.organizationId,
@@ -285,12 +296,14 @@ export function createLoginHandler(dependencies: LoginDependencies = {}) {
       return response;
     }
 
-    return buildAuthenticatedLoginResponse({
+    return await buildAuthenticatedLoginResponse({
       request,
       isJsonRequest,
       user,
       membership: membershipSelection.membership,
       createSessionTokenFn,
+      createAuthSessionFn,
+      getSessionExpiresAtFn,
       getSessionCookieOptionsFn,
       getExpiredPendingLoginCookieOptionsFn,
       redirectTo: formRequest?.redirectTo ?? null,
@@ -305,6 +318,7 @@ export function createLogoutHandler(dependencies: LogoutDependencies = {}) {
     dependencies.getExpiredPendingLoginCookieOptionsFn ?? getExpiredPendingLoginCookieOptions;
   const assertSameOriginRequestFn =
     dependencies.assertSameOriginRequestFn ?? assertSameOriginRequest;
+  const revokeAuthSessionTokenFn = dependencies.revokeAuthSessionTokenFn ?? revokeAuthSessionToken;
 
   return async function POST(request: Request): Promise<Response> {
     const sameOriginResult = assertSameOriginRequestFn(request);
@@ -314,6 +328,10 @@ export function createLogoutHandler(dependencies: LogoutDependencies = {}) {
 
     const isJsonRequest =
       request.headers.get("content-type")?.includes("application/json") ?? false;
+    const sessionToken = readRequestCookie(request, SESSION_COOKIE_NAME);
+    if (sessionToken) {
+      await revokeAuthSessionTokenFn(sessionToken);
+    }
 
     const response = isJsonRequest
       ? Response.json({ ok: true })
@@ -336,7 +354,9 @@ async function finalizeSelectedOrganizationSession(input: {
   isJsonRequest: boolean;
   userLoader: (userId: string) => Promise<LoginUserRecord | null>;
   createSessionTokenFn: typeof createSessionToken;
+  createAuthSessionFn: typeof createAuthSession;
   verifyPendingLoginTokenFn: typeof verifyPendingLoginToken;
+  getSessionExpiresAtFn: typeof getSessionExpiresAt;
   getSessionCookieOptionsFn: typeof getSessionCookieOptions;
   getExpiredPendingLoginCookieOptionsFn: typeof getExpiredPendingLoginCookieOptions;
   organizationId: string | null;
@@ -399,33 +419,48 @@ async function finalizeSelectedOrganizationSession(input: {
         );
   }
 
-  return buildAuthenticatedLoginResponse({
+  return await buildAuthenticatedLoginResponse({
     request: input.request,
     isJsonRequest: input.isJsonRequest,
     user,
     membership: selectedMembership,
     createSessionTokenFn: input.createSessionTokenFn,
+    createAuthSessionFn: input.createAuthSessionFn,
+    getSessionExpiresAtFn: input.getSessionExpiresAtFn,
     getSessionCookieOptionsFn: input.getSessionCookieOptionsFn,
     getExpiredPendingLoginCookieOptionsFn: input.getExpiredPendingLoginCookieOptionsFn,
     redirectTo: pendingPayload.redirectTo,
   });
 }
 
-function buildAuthenticatedLoginResponse(input: {
+async function buildAuthenticatedLoginResponse(input: {
   request: Request;
   isJsonRequest: boolean;
   user: LoginUserRecord;
   membership: EligibleLoginMembershipRecord;
   createSessionTokenFn: typeof createSessionToken;
+  createAuthSessionFn: typeof createAuthSession;
+  getSessionExpiresAtFn: typeof getSessionExpiresAt;
   getSessionCookieOptionsFn: typeof getSessionCookieOptions;
   getExpiredPendingLoginCookieOptionsFn: typeof getExpiredPendingLoginCookieOptions;
   redirectTo: string | null;
-}): Response {
-  const token = input.createSessionTokenFn({
+}): Promise<Response> {
+  const expiresAt = input.getSessionExpiresAtFn();
+  const session = await input.createAuthSessionFn({
     userId: input.user.id,
     organizationId: input.membership.organizationId,
     role: input.membership.role,
+    expiresAt,
   });
+  const token = input.createSessionTokenFn(
+    {
+      sessionId: session.id,
+      userId: input.user.id,
+      organizationId: input.membership.organizationId,
+      role: input.membership.role,
+    },
+    session.expiresAt,
+  );
 
   const response = input.isJsonRequest
     ? Response.json({
